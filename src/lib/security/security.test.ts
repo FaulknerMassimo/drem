@@ -17,6 +17,7 @@ import {
   sweepRateLimits,
 } from "./rate-limit";
 import { generateToken, hashIp, hashToken, tokensMatch } from "./tokens";
+import { cookieSecureFromHeaders } from "./cookie-options";
 
 const APP_ORIGIN = "https://dreams.example.com";
 
@@ -120,6 +121,22 @@ describe("security headers", () => {
     expect(
       securityHeaders({ nonce: "n", secure: true })["Strict-Transport-Security"],
     ).toContain("max-age=63072000");
+  });
+});
+
+describe("session cookie Secure flag", () => {
+  it("follows APP_ORIGIN when no proxy header is present", () => {
+    const h = new Headers();
+    expect(cookieSecureFromHeaders(h, "http://192.168.1.221:3000")).toBe(false);
+    expect(cookieSecureFromHeaders(h, "https://dreams.example.com")).toBe(true);
+  });
+
+  it("honours x-forwarded-proto from a TLS-terminating proxy", () => {
+    const h = new Headers({ "x-forwarded-proto": "https" });
+    expect(cookieSecureFromHeaders(h, "http://192.168.1.221:3000")).toBe(true);
+
+    const plain = new Headers({ "x-forwarded-proto": "http" });
+    expect(cookieSecureFromHeaders(plain, "https://dreams.example.com")).toBe(false);
   });
 });
 

@@ -9,6 +9,7 @@ import { users } from "@/db/schema";
 import { decryptString } from "@/lib/crypto/aead";
 import type { UserKeys } from "@/lib/crypto/envelope";
 import { env } from "@/lib/env";
+import { cookieSecureFromHeaders } from "@/lib/security/cookie-options";
 import { assertCsrf } from "@/lib/security/csrf-server";
 import {
   LOGIN_RULES,
@@ -154,7 +155,7 @@ export async function loginAction(
   store.set(PENDING_COOKIE, pendingId, {
     httpOnly: true,
     sameSite: "lax",
-    secure: env().NODE_ENV === "production",
+    secure: cookieSecureFromHeaders(await headers(), env().APP_ORIGIN),
     path: "/",
     maxAge: 300,
   });

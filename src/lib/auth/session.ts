@@ -1,16 +1,18 @@
 import "server-only";
 import { randomUUID } from "node:crypto";
 import { and, eq, isNull, lt, or } from "drizzle-orm";
-import { cookies } from "next/headers";
+import { cookies, headers } from "next/headers";
 import { redirect } from "next/navigation";
 import { db } from "@/db";
 import { sessions, users } from "@/db/schema";
 import type { UserKeys } from "@/lib/crypto/envelope";
 import { env, masterKey } from "@/lib/env";
+import { cookieSecureFromHeaders } from "@/lib/security/cookie-options";
 import {
   dropKeys,
   dropKeysForUser,
   getKeys,
+  peekKeysForUser,
   putKeys,
 } from "./key-store";
 import { generateToken, hashToken, hashIp } from "@/lib/security/tokens";
@@ -26,6 +28,10 @@ export interface ActiveSession {
 
 function idleTtlMs(): number {
   return env().SESSION_IDLE_TIMEOUT * 1000;
+}
+
+async function sessionCookieSecure(): Promise<boolean> {
+  return cookieSecureFromHeaders(await headers(), env().APP_ORIGIN);
 }
 
 /**
@@ -60,7 +66,7 @@ export async function createSession(
   store.set(SESSION_COOKIE, `${sessionId}.${token}`, {
     httpOnly: true,
     sameSite: "lax",
-    secure: env().NODE_ENV === "production",
+    secure: await sessionCookieSecure(),
     path: "/",
     maxAge: env().SESSION_ABSOLUTE_TIMEOUT,
   });
@@ -94,9 +100,6 @@ export async function currentSession(): Promise<ActiveSession | null> {
   const parsed = parseCookie(cookie);
   if (!parsed) return null;
 
-  const keys = getKeys(parsed.sessionId, idleTtlMs());
-  if (!keys) return null;
-
   const now = new Date();
   const [row] = await db
     .select({
@@ -120,6 +123,17 @@ export async function currentSession(): Promise<ActiveSession | null> {
   // stored value, so a guessed session id alone gets nowhere.
   if (!row.tokenHash.equals(hashToken(parsed.token))) {
     return null;
+  }
+
+  let keys = getKeys(parsed.sessionId, idleTtlMs(), now.getTime());
+  if (!keys) {
+    // The session row outlived its keys — common after a dev fast refresh, or
+    // when the cookie names one session id but keys linger under another slot
+    // for the same user in this process. Re-attach before forcing a re-login.
+    const live = peekKeysForUser(row.userId, now.getTime());
+    if (!live) return null;
+    putKeys(parsed.sessionId, row.userId, live, idleTtlMs(), now.getTime());
+    keys = live;
   }
 
   // Slide the idle deadline, but never past the absolute ceiling.

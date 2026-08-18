@@ -41,6 +41,9 @@ services:
       DATABASE_URL: postgresql://drem:${POSTGRES_PASSWORD}@db:5432/drem
       MASTER_KEY: ${MASTER_KEY:?run `npm run keygen` and put the result in .env}
       APP_ORIGIN: ${APP_ORIGIN:-http://localhost:3000}
+      # Docker sets HOSTNAME to the container id; Next binds to HOSTNAME, which
+      # then fails DNS lookup (EAI_AGAIN). Force the all-interfaces bind.
+      HOSTNAME: "0.0.0.0"
       # Ollama stays on the host so it keeps GPU access; reach it via the gateway.
       OLLAMA_BASE_URL: http://host.docker.internal:11434
       WHISPER_BASE_URL: http://whisper:8000
@@ -51,7 +54,7 @@ services:
     extra_hosts:
       - "host.docker.internal:host-gateway"
     ports:
-      - "127.0.0.1:3000:3000"
+      - "3000:3000"
     volumes:
       - uploads:/data/uploads
     deploy:

@@ -1,3 +1,4 @@
+import Link from "next/link";
 import { redirect } from "next/navigation";
 import { CsrfField } from "@/components/csrf-field";
 import { logoutAction } from "@/lib/auth/actions";
@@ -35,39 +36,39 @@ export default async function AppLayout({
       <header className="border-b border-ink-800">
         <div className="mx-auto flex max-w-5xl flex-wrap items-center justify-between gap-3 px-4 py-3">
           <div className="flex items-baseline gap-5">
-            <a href="/" className="text-lg font-semibold tracking-tight">
+            <Link href="/" className="text-lg font-semibold tracking-tight">
               drem
-            </a>
+            </Link>
             <nav className="flex items-center gap-4 text-sm text-ink-400">
-              <a href="/journal" className="hover:text-ink-200">
+              <Link href="/journal" className="hover:text-ink-200">
                 Journal
-              </a>
-              <a href="/drafts" className="hover:text-ink-200">
+              </Link>
+              <Link href="/drafts" className="hover:text-ink-200">
                 Drafts
                 {drafts > 0 && (
                   <span className="ml-1.5 rounded-full bg-warn-500/20 px-1.5 py-0.5 text-xs text-warn-500">
                     {drafts}
                   </span>
                 )}
-              </a>
-              <a href={`/night/${tonight}`} className="hover:text-ink-200">
+              </Link>
+              <Link href={`/night/${tonight}`} className="hover:text-ink-200">
                 Tonight
-              </a>
-              <a href="/reports" className="hover:text-ink-200">
+              </Link>
+              <Link href="/reports" className="hover:text-ink-200">
                 Reports
-              </a>
-              <a href="/settings" className="hover:text-ink-200">
+              </Link>
+              <Link href="/settings" className="hover:text-ink-200">
                 Settings
-              </a>
+              </Link>
             </nav>
           </div>
 
           <div className="flex items-center gap-4">
             {/* Reachable from every screen: the moment it is needed there is no
                 time to go looking for it. */}
-            <a href="/capture" className="text-sm text-lucid-300 hover:text-lucid-400">
+            <Link href="/capture" className="text-sm text-lucid-300 hover:text-lucid-400">
               Capture
-            </a>
+            </Link>
             <form action={logoutAction}>
               <CsrfField />
               <button type="submit" className="text-sm text-ink-400 hover:text-ink-200">
