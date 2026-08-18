@@ -22,6 +22,28 @@
   --color-lucid-400: #9b8cf7;
   --color-lucid-300: #b8adfb;
 
+  /*
+   * The heatmap's two ramps. Recall and lucidity differ in hue, not just
+   * intensity, so a lucid night is distinguishable at a glance and does not
+   * read as merely "a long entry".
+   */
+  --color-recall-1: #1c3a2c;
+  --color-recall-2: #27573f;
+  --color-recall-3: #357a56;
+  --color-recall-4: #4caf7d;
+
+  --color-lucid-1: #2e2a55;
+  --color-lucid-2: #453f86;
+  --color-lucid-3: #6055c4;
+  --color-lucid-4: #7c6cf0;
+
+  /*
+   * Capture mode. Deep red on black preserves dark adaptation, so a 4am
+   * capture does not wake you up enough to lose the dream you are writing down.
+   */
+  --color-night-red: #d1372b;
+  --color-night-dim: #6e1a13;
+
   --color-warn-500: #d8763f;
   --color-danger-500: #d9534f;
   --color-ok-500: #4caf7d;
@@ -73,5 +95,88 @@ body {
 
   .card {
     @apply rounded-xl border border-ink-800 bg-ink-900 p-6;
+  }
+}
+
+@layer components {
+  /*
+   * The activity heatmap.
+   *
+   * Sized in fixed pixels rather than relative units: the grid is 53 columns
+   * wide and must stay square, so it scrolls horizontally on a phone rather
+   * than reflowing into something that is no longer a calendar.
+   */
+  .hm-grid {
+    display: grid;
+    grid-auto-flow: column;
+    grid-template-rows: repeat(7, 11px);
+    gap: 3px;
+  }
+
+  .hm-cell {
+    width: 11px;
+    height: 11px;
+    border-radius: 2px;
+  }
+
+  /* Outside the year, or not yet arrived: no square at all. */
+  .hm-empty {
+    background-color: transparent;
+  }
+
+  /* Nothing written. */
+  .hm-missed {
+    background-color: var(--color-ink-850);
+  }
+
+  /* Journalled, nothing recalled — an outline, because it is not an absence. */
+  .hm-logged {
+    background-color: transparent;
+    box-shadow: inset 0 0 0 1px var(--color-ink-600);
+  }
+
+  .hm-recalled-1 { background-color: var(--color-recall-1); }
+  .hm-recalled-2 { background-color: var(--color-recall-2); }
+  .hm-recalled-3 { background-color: var(--color-recall-3); }
+  .hm-recalled-4 { background-color: var(--color-recall-4); }
+
+  .hm-lucid-1 { background-color: var(--color-lucid-1); }
+  .hm-lucid-2 { background-color: var(--color-lucid-2); }
+  .hm-lucid-3 { background-color: var(--color-lucid-3); }
+  .hm-lucid-4 { background-color: var(--color-lucid-4); }
+
+  a.hm-cell:hover {
+    outline: 1px solid var(--color-ink-300);
+    outline-offset: 1px;
+  }
+
+  /* Capture mode: everything on this screen opts out of the normal palette. */
+  .night-screen {
+    background-color: #000;
+    color: var(--color-night-red);
+  }
+
+  .night-field {
+    @apply w-full resize-none bg-transparent outline-none;
+    color: var(--color-night-red);
+    caret-color: var(--color-night-red);
+  }
+
+  .night-field::placeholder {
+    color: var(--color-night-dim);
+  }
+
+  .night-button {
+    @apply w-full rounded-lg px-4 py-4 text-lg font-medium transition-colors;
+    border: 1px solid var(--color-night-dim);
+    color: var(--color-night-red);
+  }
+
+  .night-button:hover:not(:disabled) {
+    background-color: rgba(209, 55, 43, 0.08);
+  }
+
+  .night-screen :focus-visible {
+    outline: 2px solid var(--color-night-red);
   }
 }

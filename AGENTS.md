@@ -44,6 +44,15 @@ the password, or `MASTER_KEY` appears in it. **If you add a new encrypted
 field, add it to that test.** A field silently stored in plaintext is the single
 worst bug this project can have, and it will not announce itself.
 
+`journal.integration.test.ts` makes the same assertion over the *application's*
+write path rather than hand-built rows, and reads the bytes back out in SQL
+instead of shelling out to `pg_dump` — so it runs without Docker access. Add new
+encrypted fields to both.
+
+`npm run seed -- --email ... --password ...` fills a development journal with
+months of plausible nights. Features about shape over time — the heatmap, the
+streaks — look fine and prove nothing with four hand-typed entries.
+
 ## Rules
 
 1. **Anything a person wrote gets encrypted.** Dream text, titles, night notes,
@@ -83,10 +92,19 @@ worst bug this project can have, and it will not announce itself.
 src/lib/crypto/     aead, kdf, envelope, blind-index, totp, recovery
 src/lib/security/   headers, csrf, rate-limit, tokens
 src/lib/auth/       accounts, session, key-store, pending, one-shot, actions
+src/lib/journal/    nights, dreams, tags, stats + pure: dates, heatmap, streaks
 src/db/schema.ts    all 15 tables, with the reasoning in comments
 src/app/(auth)/     setup, login, TOTP verify
 src/app/(app)/      everything behind a session
+src/app/(capture)/  the 3am screen, deliberately outside the app chrome
 ```
+
+`src/lib/journal/` is split so the parts worth testing can be tested: `dates`,
+`heatmap`, `streaks`, `words` and `validation` are pure and have unit suites;
+`nights`, `dreams`, `tags` and `stats` touch the database and are covered by
+`journal.integration.test.ts`. `labels.ts` is duplicated from the schema enums
+on purpose, so client components do not pull Drizzle into the browser bundle —
+`validation.ts` holds a compile-time guard against the two drifting.
 
 Auth is hand-rolled rather than NextAuth because the session must hold an
 unwrapped data key in memory, which no off-the-shelf adapter models.
@@ -114,6 +132,20 @@ them.
   unstyled page with no JavaScript, and forms fall back to native POSTs.
 - **`APP_ORIGIN` is compared literally.** `http://localhost:3000` and
   `http://127.0.0.1:3000` are different origins and CSRF will reject the mismatch.
+  Next runs its *own* Server Action origin check against the real request host on
+  top of ours, so a dev server on a different port fails both — set `APP_ORIGIN`
+  to match whatever port it actually bound to.
+- **Scripts must run with `--conditions=react-server`.** Anything importing
+  `src/db` or `src/lib/journal` transitively imports `server-only`, which throws
+  under Node's default resolution and resolves to a no-op under that condition.
+  See the `seed` script in `package.json`.
+- **A row's id must be resolved before its ciphertext is encrypted.** The AAD
+  binds a value to the row it lands in, so an upsert that mints a fresh uuid,
+  encrypts under it and then updates an existing row writes a field nobody can
+  ever decrypt. `saveNight()` resolves the night first for this reason.
+- **De-duplicate tag ids, not tag names.** Normalisation folds Unicode form,
+  case and whitespace together, so two names that look different can share one
+  fingerprint — attaching both to a dream collides on `dream_tags`' primary key.
 
 ## Style
 
@@ -121,3 +153,13 @@ Match the surrounding code. Comments explain *why*, especially where a choice
 trades something away — the codebase is full of deliberate trade-offs that look
 like mistakes without the reasoning. Tests are named as behaviour statements
 (`"refuses the right password without MASTER_KEY"`), not `test1`.
+
+<!-- BEGIN:nextjs-agent-rules -->
+
+# This is NOT the Next.js you know
+
+This version has breaking changes — APIs, conventions, and file structure may all differ from your training data. Read the relevant guide in `node_modules/next/dist/docs/` (resolved from this file's directory; in monorepos the `next` package may not be visible from the repo root) before writing any code. Heed deprecation notices.
+
+This block is written and re-added by `next dev` — verify at `node_modules/next/dist/server/lib/generate-agent-files.js`. Removing it from a diff only re-creates the uncommitted change; committing it with your work keeps the tree clean.
+
+<!-- END:nextjs-agent-rules -->

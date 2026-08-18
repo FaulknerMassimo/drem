@@ -16,7 +16,7 @@
     "db:push": "drizzle-kit push",
     "db:studio": "drizzle-kit studio",
     "keygen": "tsx scripts/generate-keys.ts",
-    "seed": "tsx scripts/seed.ts",
+    "seed": "tsx --conditions=react-server scripts/seed.ts",
     "dev:up": "docker compose -f docker-compose.yml -f docker-compose.dev.yml up -d db whisper",
     "dev:down": "docker compose -f docker-compose.yml -f docker-compose.dev.yml down",
     "dev:logs": "docker compose -f docker-compose.yml -f docker-compose.dev.yml logs -f",

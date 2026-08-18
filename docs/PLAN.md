@@ -33,7 +33,7 @@ otherwise.
 | Embeddings | `embeddinggemma:300m` (768-dim) |
 | Delivery | Phased; each phase ends runnable |
 
-Two deviations from the original plan, both deliberate:
+Three deviations from the original plan, all deliberate:
 
 - **Next 16, not 15.** Next 15 was superseded during the build; 16 is the same
   App Router architecture.
@@ -41,6 +41,11 @@ Two deviations from the original plan, both deliberate:
   them was a latent data-loss bug: raising the work factor later changes the
   derived key and would permanently brick every existing entry. See
   `src/lib/crypto/kdf.ts`.
+- **A heatmap cell links to its night, not to a filtered list.** "Click to
+  filter" read naturally as filtering the journal list to one day, but that
+  makes every unwritten square a dead end. `/night/2026-08-17` shows the day's
+  entries *and* offers to start one, which is what clicking an empty square is
+  actually for.
 
 ## Security model
 
@@ -67,11 +72,11 @@ current one's tests pass.
       single-use time steps, recovery codes, CSRF, rate limiting, security
       headers, audit log, and the setup/login/recovery UI. Verified end to end
       in a browser against a live database.
-- [ ] **2 — Journal core.** Nights and dreams CRUD, entry editor with full
+- [x] **2 — Journal core.** Nights and dreams CRUD, entry editor with full
       metadata, list/filter/sort, tags, **activity heatmap** (53×7 grid, year
       picker, lucid nights visually distinct, click-to-filter), recall and lucid
       streaks, **3am capture mode** (deep-red/black single-field screen feeding a
-      draft queue).
+      draft queue). Verified end to end over HTTP against a live database.
 - [ ] **3 — AI insights.** Provider layer with adapters and per-role model
       config, settings UI with connection test, the four insight kinds
       (extraction → lucidity coach → symbolic reading → period reports), job

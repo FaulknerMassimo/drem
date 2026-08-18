@@ -2,6 +2,7 @@ import "server-only";
 import { randomUUID } from "node:crypto";
 import { and, eq, isNull, lt, or } from "drizzle-orm";
 import { cookies } from "next/headers";
+import { redirect } from "next/navigation";
 import { db } from "@/db";
 import { sessions, users } from "@/db/schema";
 import type { UserKeys } from "@/lib/crypto/envelope";
@@ -137,6 +138,19 @@ export async function currentSession(): Promise<ActiveSession | null> {
 export async function requireSession(): Promise<ActiveSession> {
   const session = await currentSession();
   if (!session) throw new Error("UNAUTHENTICATED");
+  return session;
+}
+
+/**
+ * For pages: sends the visitor to the login screen instead of throwing.
+ *
+ * The gate in the app layout is not sufficient on its own, because Next renders
+ * layouts and pages concurrently — a page must not assume the layout's redirect
+ * has already happened.
+ */
+export async function sessionOrRedirect(): Promise<ActiveSession> {
+  const session = await currentSession();
+  if (!session) redirect("/login");
   return session;
 }
 

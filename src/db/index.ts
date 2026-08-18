@@ -25,3 +25,10 @@ function client() {
 
 export const db = drizzle(client(), { schema });
 export { schema };
+
+/**
+ * `db` or an open transaction. Helpers that may be called either standalone or
+ * as part of a larger write take this, so a caller is never forced to choose
+ * between reuse and atomicity.
+ */
+export type Executor = typeof db | Parameters<Parameters<typeof db.transaction>[0]>[0];

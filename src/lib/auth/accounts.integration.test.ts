@@ -23,8 +23,8 @@ import {
   users,
 } from "@/db/schema";
 import { decryptString, encrypt } from "@/lib/crypto/aead";
-import { blindIndex } from "@/lib/crypto/blind-index";
 import { totp } from "@/lib/crypto/totp";
+import { tagFingerprint } from "@/lib/journal/tags";
 import { normalizeRecoveryCode } from "@/lib/crypto/recovery";
 import {
   AuthError,
@@ -259,7 +259,7 @@ describe("what a stolen database actually contains", () => {
         column: "name_enc",
         id: tagId,
       }),
-      nameBidx: blindIndex(keys.index, CANARY),
+      nameBidx: tagFingerprint(keys, CANARY),
     });
 
     return execFileSync(
@@ -311,7 +311,7 @@ describe("what a stolen database actually contains", () => {
     const found = await db
       .select()
       .from(tags)
-      .where(eq(tags.nameBidx, blindIndex(keys.index, CANARY)));
+      .where(eq(tags.nameBidx, tagFingerprint(keys, CANARY)));
 
     expect(found).toHaveLength(1);
     expect(
