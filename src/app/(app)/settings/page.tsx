@@ -14,9 +14,10 @@ export default async function SettingsPage() {
       <div>
         <h1 className="text-2xl font-semibold">Settings</h1>
         <p className="mt-2 max-w-2xl text-sm text-ink-400">
-          Assign a model to each insight kind before generating anything. Every
-          request names its destination on the entry itself, so a dream cannot
-          leave this machine without you seeing where it is going.
+          Assign a model to each role before generating anything. Capture roles
+          cover photographed pages and splitting a log that contains several
+          dreams. Every request names its destination first, so nothing leaves
+          this machine without you seeing where it is going.
         </p>
       </div>
       <SettingsForm initial={config} csrfToken={await readCsrfToken()} />

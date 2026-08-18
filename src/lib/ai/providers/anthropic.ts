@@ -4,7 +4,7 @@
  * The system prompt is a top-level field here, not a message, so it is split
  * out of the chat request rather than sent as `role: "system"`.
  */
-import type { ChatMessage, ChatRequest, ChatResponse, ConnectionTest, ProviderConfig } from "../types";
+import type { ChatImage, ChatMessage, ChatRequest, ChatResponse, ConnectionTest, ProviderConfig } from "../types";
 import { ProviderError } from "./errors";
 import { CHAT_TIMEOUT_MS, joinUrl, requestJson, TEST_TIMEOUT_MS } from "./http";
 
@@ -21,7 +21,7 @@ export async function anthropicChat(
     model: request.model,
     max_tokens: request.maxTokens,
     temperature: request.temperature,
-    messages,
+    messages: serialiseAnthropicMessages(messages, request.images),
   };
   if (system) body.system = system;
 
@@ -68,6 +68,39 @@ export async function anthropicTest(
         : `Reached Anthropic. ${count} model${count === 1 ? "" : "s"} listed.`,
     models,
   };
+}
+
+function serialiseAnthropicMessages(
+  messages: ChatMessage[],
+  images: ChatImage[] | undefined,
+): unknown[] {
+  const lastUser = lastUserIndex(messages);
+  return messages.map((message, index) => {
+    if (index !== lastUser || !images?.length) {
+      return { role: message.role, content: message.content };
+    }
+    return {
+      role: message.role,
+      content: [
+        ...images.map((image) => ({
+          type: "image",
+          source: {
+            type: "base64",
+            media_type: image.mimeType,
+            data: image.bytes.toString("base64"),
+          },
+        })),
+        { type: "text", text: message.content },
+      ],
+    };
+  });
+}
+
+function lastUserIndex(messages: ChatMessage[]): number {
+  for (let i = messages.length - 1; i >= 0; i--) {
+    if (messages[i]?.role === "user") return i;
+  }
+  return -1;
 }
 
 function splitSystem(messages: ChatMessage[]): { system: string; messages: ChatMessage[] } {

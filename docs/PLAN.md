@@ -82,10 +82,11 @@ current one's tests pass.
       (extraction → lucidity coach → symbolic reading → period reports), job
       queue, and a visible badge naming where a request is about to go before
       any dream leaves the machine.
-- [ ] **4 — Capture.** Encrypted attachments, photo OCR with side-by-side review
+- [x] **4 — Capture.** Encrypted attachments, photo OCR with side-by-side review
       (image left, extracted fields right, per-field confidence, nothing saved
       unconfirmed), bulk multi-page import, voice memo → faster-whisper,
-      JSON/Markdown/CSV import.
+      JSON/Markdown/CSV import, and AI splitting of a log that contains several
+      dreams into separate entries.
 - [ ] **5 — Semantic layer.** Embedding pipeline and backfill, meaning-based
       search, "dreams like this", AI dream-sign detection with per-sign frequency
       and lucidity correlation.

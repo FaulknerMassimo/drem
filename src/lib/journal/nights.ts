@@ -171,6 +171,12 @@ export async function deleteNight(
       .from(dreams)
       .where(and(eq(dreams.userId, userId), eq(dreams.nightId, night.id)));
 
+    const { purgeBlobsForDreams } = await import("@/lib/capture/attachments");
+    await purgeBlobsForDreams(
+      userId,
+      attached.map((row) => row.id),
+    );
+
     await tx.delete(nights).where(and(eq(nights.id, night.id), eq(nights.userId, userId)));
     return { deleted: true, dreamCount: attached.length };
   });

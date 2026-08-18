@@ -14,11 +14,15 @@ import { jobs } from "@/db/schema";
 import { isIsoDate, type IsoDate } from "@/lib/journal/dates";
 import type { DreamInsightKind, InsightRole } from "./types";
 
-export type JobKind =
+export type InsightJobKind =
   | "extract_insight"
   | "lucidity_insight"
   | "symbolic_insight"
   | "period_report";
+
+export type CaptureJobKind = "ocr_attachment" | "transcribe_attachment";
+
+export type JobKind = InsightJobKind | CaptureJobKind;
 
 export interface DreamJobPayload {
   dreamId: string;
@@ -29,42 +33,61 @@ export interface ReportJobPayload {
   periodEnd: IsoDate;
 }
 
+export interface AttachmentJobPayload {
+  attachmentId: string;
+}
+
+export type JobPayload = DreamJobPayload | ReportJobPayload | AttachmentJobPayload;
+
 export interface JobRecord {
   id: string;
   userId: string;
   kind: JobKind;
-  payload: DreamJobPayload | ReportJobPayload;
+  payload: JobPayload;
   status: (typeof jobs.$inferSelect)["status"];
   attempts: number;
   lastError: string | null;
   scheduledFor: Date;
 }
 
-const DREAM_JOB: Record<DreamInsightKind, JobKind> = {
+const DREAM_JOB: Record<DreamInsightKind, InsightJobKind> = {
   extraction: "extract_insight",
   lucidity: "lucidity_insight",
   symbolic: "symbolic_insight",
 };
 
-const KIND_FROM_JOB: Record<JobKind, InsightRole> = {
+const KIND_FROM_JOB: Record<InsightJobKind, InsightRole> = {
   extract_insight: "extraction",
   lucidity_insight: "lucidity",
   symbolic_insight: "symbolic",
   period_report: "report",
 };
 
+const ALL_JOB_KINDS: JobKind[] = [
+  "extract_insight",
+  "lucidity_insight",
+  "symbolic_insight",
+  "period_report",
+  "ocr_attachment",
+  "transcribe_attachment",
+];
+
 const OPEN: Array<(typeof jobs.$inferSelect)["status"]> = ["pending", "running"];
 
-export function jobKindFor(role: DreamInsightKind): JobKind {
+export function jobKindFor(role: DreamInsightKind): InsightJobKind {
   return DREAM_JOB[role];
 }
 
-export function roleForJob(kind: JobKind): InsightRole {
+export function roleForJob(kind: InsightJobKind): InsightRole {
   return KIND_FROM_JOB[kind];
 }
 
-export function isJobKind(value: string): value is JobKind {
+export function isInsightJobKind(value: string): value is InsightJobKind {
   return value in KIND_FROM_JOB;
+}
+
+export function isJobKind(value: string): value is JobKind {
+  return (ALL_JOB_KINDS as string[]).includes(value);
 }
 
 function asDreamPayload(value: unknown): DreamJobPayload | null {
@@ -81,6 +104,14 @@ function asReportPayload(value: unknown): ReportJobPayload | null {
   return { periodStart, periodEnd };
 }
 
+function asAttachmentPayload(value: unknown): AttachmentJobPayload | null {
+  if (!value || typeof value !== "object") return null;
+  const attachmentId = (value as { attachmentId?: unknown }).attachmentId;
+  return typeof attachmentId === "string" && attachmentId.length > 0
+    ? { attachmentId }
+    : null;
+}
+
 export function parseDreamPayload(value: unknown): DreamJobPayload {
   const parsed = asDreamPayload(value);
   if (!parsed) throw new Error("Job payload is missing dreamId");
@@ -90,6 +121,12 @@ export function parseDreamPayload(value: unknown): DreamJobPayload {
 export function parseReportPayload(value: unknown): ReportJobPayload {
   const parsed = asReportPayload(value);
   if (!parsed) throw new Error("Job payload is missing a period");
+  return parsed;
+}
+
+export function parseAttachmentPayload(value: unknown): AttachmentJobPayload {
+  const parsed = asAttachmentPayload(value);
+  if (!parsed) throw new Error("Job payload is missing attachmentId");
   return parsed;
 }
 
@@ -132,10 +169,33 @@ export async function enqueuePeriodReport(
   return id;
 }
 
+/**
+ * Enqueues OCR or transcription for an attachment, or returns the already-open
+ * job. Same de-dupe as insights: two uploads of the same file must not fire
+ * two model calls.
+ */
+export async function enqueueAttachmentJob(
+  userId: string,
+  attachmentId: string,
+  kind: CaptureJobKind,
+): Promise<string> {
+  const existing = await findOpenAttachmentJob(userId, attachmentId, kind);
+  if (existing) return existing;
+
+  const id = randomUUID();
+  await db.insert(jobs).values({
+    id,
+    userId,
+    kind,
+    payload: { attachmentId },
+  });
+  return id;
+}
+
 async function findOpenDreamJob(
   userId: string,
   dreamId: string,
-  kind: JobKind,
+  kind: InsightJobKind,
 ): Promise<string | null> {
   const rows = await db
     .select({ id: jobs.id, payload: jobs.payload })
@@ -143,6 +203,21 @@ async function findOpenDreamJob(
     .where(and(eq(jobs.userId, userId), eq(jobs.kind, kind), inArray(jobs.status, OPEN)));
   for (const row of rows) {
     if (asDreamPayload(row.payload)?.dreamId === dreamId) return row.id;
+  }
+  return null;
+}
+
+async function findOpenAttachmentJob(
+  userId: string,
+  attachmentId: string,
+  kind: CaptureJobKind,
+): Promise<string | null> {
+  const rows = await db
+    .select({ id: jobs.id, payload: jobs.payload })
+    .from(jobs)
+    .where(and(eq(jobs.userId, userId), eq(jobs.kind, kind), inArray(jobs.status, OPEN)));
+  for (const row of rows) {
+    if (asAttachmentPayload(row.payload)?.attachmentId === attachmentId) return row.id;
   }
   return null;
 }
@@ -158,7 +233,7 @@ export async function pendingDreamJobs(
 
   const pending: DreamInsightKind[] = [];
   for (const row of rows) {
-    if (!isJobKind(row.kind) || row.kind === "period_report") continue;
+    if (!isInsightJobKind(row.kind) || row.kind === "period_report") continue;
     if (asDreamPayload(row.payload)?.dreamId !== dreamId) continue;
     pending.push(roleForJob(row.kind) as DreamInsightKind);
   }
@@ -179,7 +254,13 @@ export async function claimNextJob(): Promise<JobRecord | null> {
   const [row] = await db
     .select()
     .from(jobs)
-    .where(and(eq(jobs.status, "pending"), lte(jobs.scheduledFor, new Date())))
+    .where(
+      and(
+        eq(jobs.status, "pending"),
+        lte(jobs.scheduledFor, new Date()),
+        inArray(jobs.kind, ALL_JOB_KINDS),
+      ),
+    )
     .orderBy(asc(jobs.scheduledFor))
     .limit(1);
   if (!row || !isJobKind(row.kind)) return null;
@@ -197,7 +278,7 @@ export async function claimNextJob(): Promise<JobRecord | null> {
     id: row.id,
     userId: row.userId,
     kind: row.kind,
-    payload: row.payload as DreamJobPayload | ReportJobPayload,
+    payload: row.payload as JobPayload,
     status: "running",
     attempts: row.attempts + 1,
     lastError: row.lastError,

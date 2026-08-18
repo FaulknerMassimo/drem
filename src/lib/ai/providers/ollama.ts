@@ -17,7 +17,7 @@ export async function ollamaChat(
 ): Promise<ChatResponse> {
   const body: Record<string, unknown> = {
     model: request.model,
-    messages: request.messages,
+    messages: serialiseOllamaMessages(request),
     stream: false,
     options: {
       temperature: request.temperature,
@@ -69,6 +69,24 @@ export async function ollamaTest(
         : `Reached Ollama. ${count} model${count === 1 ? "" : "s"} available.`,
     models,
   };
+}
+
+function serialiseOllamaMessages(request: ChatRequest): unknown[] {
+  const lastUser = lastUserIndex(request.messages);
+  return request.messages.map((message, index) => {
+    const out: Record<string, unknown> = { role: message.role, content: message.content };
+    if (index === lastUser && request.images?.length) {
+      out.images = request.images.map((image) => image.bytes.toString("base64"));
+    }
+    return out;
+  });
+}
+
+function lastUserIndex(messages: ChatRequest["messages"]): number {
+  for (let i = messages.length - 1; i >= 0; i--) {
+    if (messages[i]?.role === "user") return i;
+  }
+  return -1;
 }
 
 function readOllamaModels(payload: unknown): string[] {

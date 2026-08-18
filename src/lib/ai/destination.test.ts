@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { destinationFor, destinationsFor, hostOf, leavesMachine } from "./destination";
-import { defaultAiConfig } from "./schema";
+import { defaultAiConfig, emptyRoles } from "./schema";
 import type { AiConfig } from "./types";
 
 function config(overrides: Partial<AiConfig> = {}): AiConfig {
@@ -24,10 +24,8 @@ describe("destination of a model call", () => {
     const destination = destinationFor(
       config({
         roles: {
+          ...emptyRoles(),
           extraction: { providerId: "ollama", model: "llama3.2" },
-          lucidity: null,
-          symbolic: null,
-          report: null,
         },
       }),
       "extraction",
@@ -66,10 +64,8 @@ describe("destination of a model call", () => {
           },
         ],
         roles: {
-          extraction: null,
+          ...emptyRoles(),
           lucidity: { providerId: "anthropic", model: "claude-sonnet-4-0" },
-          symbolic: null,
-          report: null,
         },
       }),
       "lucidity",
@@ -92,10 +88,8 @@ describe("destination of a model call", () => {
           },
         ],
         roles: {
+          ...emptyRoles(),
           extraction: { providerId: "ollama", model: "llama3.2" },
-          lucidity: null,
-          symbolic: null,
-          report: null,
         },
       }),
       "extraction",
@@ -107,5 +101,7 @@ describe("destination of a model call", () => {
     const all = destinationsFor(config());
     expect(all.extraction.configured).toBe(false);
     expect(all.report.role).toBe("report");
+    expect(all.ocr.role).toBe("ocr");
+    expect(all.split.role).toBe("split");
   });
 });

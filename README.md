@@ -5,7 +5,7 @@ tracking with a GitHub-style activity heatmap, AI dream-sign detection across th
 whole archive, handwritten-page OCR, and semantic search — with the journal
 encrypted at rest throughout.
 
-Status: **Phase 3 — AI insights.** See [Roadmap](#roadmap).
+Status: **Phase 4 — Capture.** See [Roadmap](#roadmap).
 
 ## Security model
 
@@ -129,7 +129,7 @@ dream content, the password, or `MASTER_KEY` appears anywhere in it.
       setup/login/recovery UI — verified end to end in a browser against a live database
 - [x] **2** — Nights and dreams, editor, activity heatmap, streaks, 3am capture mode
 - [x] **3** — AI provider layer (Ollama / OpenAI-compatible / Anthropic), insights pipeline
-- [ ] **4** — Photo OCR with review, bulk import, voice memos
+- [x] **4** — Photo OCR with review, bulk import, voice memos, AI split of multi-dream logs
 - [ ] **5** — Embeddings, semantic search, dream-sign detection
 - [ ] **6** — Statistics, period reports, PWA offline capture, export/import
 

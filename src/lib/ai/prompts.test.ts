@@ -2,8 +2,10 @@ import { describe, expect, it } from "vitest";
 import {
   extractionMessages,
   lucidityMessages,
+  ocrMessages,
   PROMPT_VERSIONS,
   reportMessages,
+  splitMessages,
   symbolicMessages,
 } from "./prompts";
 
@@ -22,7 +24,8 @@ describe("insight prompts", () => {
     expect(PROMPT_VERSIONS.extraction).toBe("extraction.v1");
     expect(PROMPT_VERSIONS.lucidity).toBe("lucidity.v1");
     expect(PROMPT_VERSIONS.symbolic).toBe("symbolic.v1");
-    expect(PROMPT_VERSIONS.report).toBe("report.v1");
+    expect(PROMPT_VERSIONS.split).toBe("split.v1");
+    expect(PROMPT_VERSIONS.ocr).toBe("ocr.v1");
   });
 
   it("puts the dream in the user message, not the system prompt", () => {
@@ -54,5 +57,18 @@ describe("insight prompts", () => {
   it("notes when a report was capped", () => {
     const prompt = reportMessages("2026-08-01", "2026-08-17", [dream], true);
     expect(prompt.user).toMatch(/only the most recent 1 entries/i);
+  });
+
+  it("keeps the photographed page out of the OCR system prompt", () => {
+    const prompt = ocrMessages();
+    expect(prompt.system).toMatch(/literal/i);
+    expect(prompt.system).toMatch(/JSON/i);
+  });
+
+  it("puts the log in the split user message, not the system prompt", () => {
+    const prompt = splitMessages("I was flying. Then I woke and was in a train.");
+    expect(prompt.user).toContain("I was flying");
+    expect(prompt.system).not.toContain("I was flying");
+    expect(prompt.system).toMatch(/Keep the writer's words/);
   });
 });

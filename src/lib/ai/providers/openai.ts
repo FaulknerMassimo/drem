@@ -6,7 +6,7 @@
  * stays on the machine, anything else is a remote call, and the destination
  * badge uses that rather than the kind name.
  */
-import type { ChatRequest, ChatResponse, ConnectionTest, ProviderConfig } from "../types";
+import type { ChatMessage, ChatRequest, ChatResponse, ConnectionTest, ProviderConfig } from "../types";
 import { ProviderError } from "./errors";
 import { CHAT_TIMEOUT_MS, joinUrl, requestJson, TEST_TIMEOUT_MS } from "./http";
 
@@ -18,7 +18,7 @@ export async function openaiChat(
 ): Promise<ChatResponse> {
   const body: Record<string, unknown> = {
     model: request.model,
-    messages: request.messages,
+    messages: serialiseOpenAiMessages(request),
     temperature: request.temperature,
     max_tokens: request.maxTokens,
   };
@@ -70,6 +70,34 @@ export async function openaiTest(
         : `Reached the endpoint. ${count} model${count === 1 ? "" : "s"} listed.`,
     models,
   };
+}
+
+function serialiseOpenAiMessages(request: ChatRequest): unknown[] {
+  const lastUser = lastUserIndex(request.messages);
+  return request.messages.map((message, index) => {
+    if (index !== lastUser || !request.images?.length) {
+      return { role: message.role, content: message.content };
+    }
+    return {
+      role: message.role,
+      content: [
+        { type: "text", text: message.content },
+        ...request.images.map((image) => ({
+          type: "image_url",
+          image_url: {
+            url: `data:${image.mimeType};base64,${image.bytes.toString("base64")}`,
+          },
+        })),
+      ],
+    };
+  });
+}
+
+function lastUserIndex(messages: ChatMessage[]): number {
+  for (let i = messages.length - 1; i >= 0; i--) {
+    if (messages[i]?.role === "user") return i;
+  }
+  return -1;
 }
 
 function openaiHeaders(config: ProviderConfig): Record<string, string> {

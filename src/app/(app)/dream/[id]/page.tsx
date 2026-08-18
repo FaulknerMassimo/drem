@@ -1,11 +1,15 @@
 import { notFound } from "next/navigation";
+import { AttachmentGallery } from "@/components/attachment-gallery";
 import { InsightPanel } from "@/components/insight-panel";
+import { SplitForm } from "@/components/split-form";
 import { sessionOrRedirect } from "@/lib/auth/session";
 import { loadDestinations } from "@/lib/ai/config";
 import { insightsForDream } from "@/lib/ai/insights";
 import { pendingDreamJobs } from "@/lib/ai/jobs";
+import { listAttachmentsForDream } from "@/lib/capture/attachments";
 import { describeDate } from "@/lib/journal/dates";
 import { getDream } from "@/lib/journal/dreams";
+import { readCsrfToken } from "@/lib/security/csrf-server";
 import {
   LUCIDITY_LABELS,
   RATING_LABELS,
@@ -35,10 +39,12 @@ export default async function DreamPage({
   const dream = await getDream(session.userId, session.keys, id);
   if (!dream) notFound();
 
-  const [insights, pending, destinations] = await Promise.all([
+  const [insights, pending, destinations, attached, csrfToken] = await Promise.all([
     insightsForDream(session.userId, session.keys, dream.id),
     pendingDreamJobs(session.userId, dream.id),
     loadDestinations(session.userId, session.keys),
+    listAttachmentsForDream(session.userId, session.keys, dream.id),
+    readCsrfToken(),
   ]);
 
   return (
@@ -139,6 +145,16 @@ export default async function DreamPage({
           Delete
         </a>
       </div>
+
+      <AttachmentGallery attachments={attached} />
+
+      {dream.body?.trim() && (
+        <SplitForm
+          dreamId={dream.id}
+          destination={destinations.split}
+          csrfToken={csrfToken}
+        />
+      )}
 
       <InsightPanel
         dreamId={dream.id}

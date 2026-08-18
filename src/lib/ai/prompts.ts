@@ -6,13 +6,15 @@
  * the *text* of a prompt requires bumping the version; changing it in place
  * would make existing rows lie about how they were produced.
  */
-import type { InsightRole } from "./types";
+import type { InsightRole, ModelRole } from "./types";
 
-export const PROMPT_VERSIONS: Record<InsightRole, string> = {
+export const PROMPT_VERSIONS: Record<ModelRole, string> = {
   extraction: "extraction.v1",
   lucidity: "lucidity.v1",
   symbolic: "symbolic.v1",
   report: "report.v1",
+  ocr: "ocr.v1",
+  split: "split.v1",
 };
 
 export const MAX_INSIGHT_CHARS = 50_000;
@@ -120,4 +122,52 @@ export function messagesFor(
   if (role === "extraction") return extractionMessages(dream);
   if (role === "lucidity") return lucidityMessages(dream);
   return symbolicMessages(dream);
+}
+
+const OCR_SCHEMA = `{
+  "date": "YYYY-MM-DD or empty if none is written",
+  "dateConfidence": 0.0,
+  "title": "short title if the page has one, else empty",
+  "titleConfidence": 0.0,
+  "body": "the dream text, preserving the writer's words",
+  "bodyConfidence": 0.0,
+  "tags": ["short labels only if clearly written as tags"],
+  "tagsConfidence": 0.0,
+  "lucidity": null,
+  "lucidityConfidence": 0.0
+}`;
+
+/**
+ * OCR of a photographed journal page. The image is attached separately;
+ * this is only the instruction. Confidence is the model's own, surfaced
+ * in the review UI so low-certainty fields are obvious before anything is saved.
+ */
+export function ocrMessages() {
+  return {
+    system:
+      "You transcribe a photographed handwritten dream-journal page. Be literal. Do not interpret, complete, or tidy the writing into something the page does not say. If a word is unreadable, use [illegible]. Reply with a JSON object matching the schema and nothing else. Confidence is 0–1 for each field.",
+    user: `Schema:\n${OCR_SCHEMA}\n\nTranscribe the attached page.`,
+  };
+}
+
+const SPLIT_SCHEMA = `{
+  "dreams": [
+    { "title": "short title or empty", "body": "the text of this one dream", "isFragment": false }
+  ]
+}`;
+
+/**
+ * Carves a single log that contains several dreams into separate entries.
+ *
+ * The writer often dumps a whole night into one field. Scene breaks, "then I
+ * was somewhere else", or waking and falling back to sleep are the usual
+ * seams. If it is clearly one continuous dream, return a single item — never
+ * invent a split, and never invent text that was not in the log.
+ */
+export function splitMessages(body: string) {
+  return {
+    system:
+      "You split a dream-journal log into individual dream episodes. Keep the writer's words. Do not interpret, summarise, or add detail. A new dream usually starts at a scene change, a waking, or an explicit marker like 'Dream 2'. If the log is one continuous dream, return a single item. Reply with a JSON object matching the schema and nothing else.",
+    user: `Schema:\n${SPLIT_SCHEMA}\n\nLog:\n${clip(body)}`,
+  };
 }

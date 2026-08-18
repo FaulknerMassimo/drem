@@ -8,7 +8,7 @@
  * localhost heuristic without standing up a provider.
  */
 import { resolveRoles } from "./schema";
-import type { AiConfig, Destination, InsightRole, ProviderKind } from "./types";
+import type { AiConfig, Destination, ModelRole, ProviderKind } from "./types";
 
 const LOCAL_HOSTS = new Set([
   "localhost",
@@ -39,7 +39,7 @@ export function leavesMachine(kind: ProviderKind, baseUrl: string): boolean {
   return !LOCAL_HOSTS.has(hostOf(baseUrl).toLowerCase());
 }
 
-export function destinationFor(config: AiConfig, role: InsightRole): Destination {
+export function destinationFor(config: AiConfig, role: ModelRole): Destination {
   const assignment = resolveRoles(config)[role];
   const empty: Destination = {
     role,
@@ -74,11 +74,13 @@ export function destinationFor(config: AiConfig, role: InsightRole): Destination
   };
 }
 
-export function destinationsFor(config: AiConfig): Record<InsightRole, Destination> {
+export function destinationsFor(config: AiConfig): Record<ModelRole, Destination> {
   return {
     extraction: destinationFor(config, "extraction"),
     lucidity: destinationFor(config, "lucidity"),
     symbolic: destinationFor(config, "symbolic"),
     report: destinationFor(config, "report"),
+    ocr: destinationFor(config, "ocr"),
+    split: destinationFor(config, "split"),
   };
 }

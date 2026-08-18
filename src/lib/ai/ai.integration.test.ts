@@ -70,6 +70,8 @@ async function assignLocalModel() {
       lucidity: { providerId: "ollama", model: "llama3.2" },
       symbolic: null,
       report: null,
+      ocr: null,
+      split: null,
     },
   });
 }
@@ -126,7 +128,7 @@ describe("encrypted config and insights", () => {
           enabled: true,
         },
       ],
-      roles: { extraction: null, lucidity: null, symbolic: null, report: null },
+      roles: { extraction: null, lucidity: null, symbolic: null, report: null, ocr: null, split: null },
     });
 
     const [row] = await db.select().from(settings).where(eq(settings.userId, userId));

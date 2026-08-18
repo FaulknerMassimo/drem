@@ -94,6 +94,7 @@ src/lib/security/   headers, csrf, rate-limit, tokens
 src/lib/auth/       accounts, session, key-store, pending, one-shot, actions
 src/lib/journal/    nights, dreams, tags, stats + pure: dates, heatmap, streaks
 src/lib/ai/         providers, encrypted config, prompts, insights, job worker
+src/lib/capture/    encrypted attachments, OCR, whisper, import parsers, split
 src/db/schema.ts    all 15 tables, with the reasoning in comments
 src/app/(auth)/     setup, login, TOTP verify
 src/app/(app)/      everything behind a session
@@ -103,7 +104,9 @@ src/app/(capture)/  the 3am screen, deliberately outside the app chrome
 `src/lib/journal/` is split so the parts worth testing can be tested: `dates`,
 `heatmap`, `streaks`, `words` and `validation` are pure and have unit suites;
 `nights`, `dreams`, `tags` and `stats` touch the database and are covered by
-`journal.integration.test.ts`. `labels.ts` is duplicated from the schema enums
+`journal.integration.test.ts`. `src/lib/capture/` follows the same split:
+`fields`, `import-parse` and `image` are pure; attachments and the OCR worker
+are covered by `capture.integration.test.ts`. `labels.ts` is duplicated from the schema enums
 on purpose, so client components do not pull Drizzle into the browser bundle —
 `validation.ts` holds a compile-time guard against the two drifting.
 

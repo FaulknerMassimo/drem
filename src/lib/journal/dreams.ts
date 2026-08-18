@@ -230,6 +230,8 @@ export async function updateDream(
 }
 
 export async function deleteDream(userId: string, dreamId: string): Promise<boolean> {
+  const { purgeBlobsForDreams } = await import("@/lib/capture/attachments");
+  await purgeBlobsForDreams(userId, [dreamId]);
   return db.transaction(async (tx) => {
     const deleted = await tx
       .delete(dreams)

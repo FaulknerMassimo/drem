@@ -4,6 +4,7 @@ import { CsrfField } from "@/components/csrf-field";
 import { logoutAction } from "@/lib/auth/actions";
 import { currentSession, needsSetup } from "@/lib/auth/session";
 import { countDrafts } from "@/lib/journal/dreams";
+import { countInbox } from "@/lib/capture/attachments";
 import { nightDateFor } from "@/lib/journal/dates";
 import { kickWorker } from "@/lib/ai/worker";
 
@@ -26,7 +27,10 @@ export default async function AppLayout({
   const session = await currentSession();
   if (!session) redirect("/login");
 
-  const drafts = await countDrafts(session.userId);
+  const [drafts, inbox] = await Promise.all([
+    countDrafts(session.userId),
+    countInbox(session.userId),
+  ]);
   const tonight = nightDateFor();
   // Drain any jobs that were waiting on this session's keys.
   kickWorker();
@@ -53,6 +57,14 @@ export default async function AppLayout({
               </Link>
               <Link href={`/night/${tonight}`} className="hover:text-ink-200">
                 Tonight
+              </Link>
+              <Link href="/import" className="hover:text-ink-200">
+                Import
+                {inbox > 0 && (
+                  <span className="ml-1.5 rounded-full bg-warn-500/20 px-1.5 py-0.5 text-xs text-warn-500">
+                    {inbox}
+                  </span>
+                )}
               </Link>
               <Link href="/reports" className="hover:text-ink-200">
                 Reports

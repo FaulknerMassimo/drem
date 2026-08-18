@@ -9,12 +9,12 @@ import { env } from "@/lib/env";
 import { isIsoDate } from "@/lib/journal/dates";
 import { assertCsrf } from "@/lib/security/csrf-server";
 import { loadAiConfig, saveAiConfig } from "./config";
-import { destinationFor } from "./destination";
+import { gateDestination } from "./gate";
 import type { InsightFormState, SettingsFormState, TestFormState } from "./form-state";
 import { enqueueDreamInsight, enqueuePeriodReport } from "./jobs";
 import { providerTest } from "./providers";
 import { defaultUrlFor, isInsightRole, parseAiConfig } from "./schema";
-import type { DreamInsightKind, InsightRole, ProviderConfig, ProviderKind } from "./types";
+import type { DreamInsightKind, ProviderConfig, ProviderKind } from "./types";
 import { PROVIDER_KINDS } from "./types";
 import { kickWorker } from "./worker";
 
@@ -140,29 +140,6 @@ export async function requestReportAction(
   kickWorker();
   refreshAi();
   return { queued: true };
-}
-
-/**
- * The destination badge is not decorative: a remote call requires an explicit
- * acknowledgement, checked here rather than only in the browser, so a crafted
- * POST cannot skip it.
- */
-async function gateDestination(
-  session: ActiveSession,
-  role: InsightRole,
-  formData: FormData,
-): Promise<InsightFormState | null> {
-  const config = await loadAiConfig(session.userId, session.keys);
-  const destination = destinationFor(config, role);
-  if (!destination.configured) {
-    return { error: "No model is assigned for this. Choose one in Settings." };
-  }
-  if (destination.leavesMachine && formData.get("acknowledge") !== "1") {
-    return {
-      error: `Confirm that you want this dream to be sent to ${destination.host}.`,
-    };
-  }
-  return null;
 }
 
 function isProviderKind(value: string): value is ProviderKind {

@@ -18,6 +18,18 @@ export const INSIGHT_ROLES = [
 export type InsightRole = (typeof INSIGHT_ROLES)[number];
 export type DreamInsightKind = Exclude<InsightRole, "report">;
 
+/**
+ * Capture roles sit next to insights in the same config blob so the
+ * destination badge, the settings page and the worker share one assignment
+ * map. They are not insight kinds: OCR reads a photograph, split carves a
+ * log into separate entries.
+ */
+export const CAPTURE_ROLES = ["ocr", "split"] as const;
+export type CaptureRole = (typeof CAPTURE_ROLES)[number];
+
+export const MODEL_ROLES = [...INSIGHT_ROLES, ...CAPTURE_ROLES] as const;
+export type ModelRole = (typeof MODEL_ROLES)[number];
+
 export interface ProviderConfig {
   id: string;
   kind: ProviderKind;
@@ -34,7 +46,7 @@ export interface RoleAssignment {
   model: string;
 }
 
-export type RoleMap = Record<InsightRole, RoleAssignment | null>;
+export type RoleMap = Record<ModelRole, RoleAssignment | null>;
 
 export interface AiConfig {
   providers: ProviderConfig[];
@@ -59,6 +71,12 @@ export interface ChatMessage {
   content: string;
 }
 
+/** A photographed page, attached to a chat request. Never logged. */
+export interface ChatImage {
+  mimeType: "image/jpeg" | "image/png" | "image/webp";
+  bytes: Buffer;
+}
+
 export interface ChatRequest {
   model: string;
   messages: ChatMessage[];
@@ -67,6 +85,8 @@ export interface ChatRequest {
   temperature: number;
   /** Ask the model for a JSON object. Extraction uses this; the rest do not. */
   json?: boolean;
+  /** Attached to the last user message. OCR is the only caller today. */
+  images?: ChatImage[];
 }
 
 export interface ChatResponse {
@@ -88,7 +108,7 @@ export interface ConnectionTest {
  * this bag of strings — never the API key, never the dream.
  */
 export interface Destination {
-  role: InsightRole;
+  role: ModelRole;
   configured: boolean;
   leavesMachine: boolean;
   providerId: string;

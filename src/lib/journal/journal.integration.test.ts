@@ -12,6 +12,7 @@
  */
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { randomUUID } from "node:crypto";
+import sharp from "sharp";
 import { and, eq, sql } from "drizzle-orm";
 import { db } from "@/db";
 import {
@@ -28,6 +29,9 @@ import type { UserKeys } from "@/lib/crypto/envelope";
 import { createInitialAccount } from "@/lib/auth/accounts";
 import { saveAiConfig } from "@/lib/ai/config";
 import { saveInsight } from "@/lib/ai/insights";
+import { createImageAttachment, saveTranscript } from "@/lib/capture/attachments";
+import { fieldsFromTranscript } from "@/lib/capture/fields";
+import { prepareImage } from "@/lib/capture/image";
 import {
   captureDream,
   createDream,
@@ -60,7 +64,7 @@ async function wipeAll() {
 }
 
 async function wipeJournal() {
-  await db.execute(sql`truncate table ${nights}, ${dreams}, ${tags} restart identity cascade`);
+  await db.execute(sql`truncate table ${nights}, ${dreams}, ${tags}, ${attachments} restart identity cascade`);
 }
 
 /** A dream input with everything optional left out. */
@@ -589,8 +593,16 @@ describe("what a stolen database actually contains", () => {
           enabled: true,
         },
       ],
-      roles: { extraction: null, lucidity: null, symbolic: null, report: null },
+      roles: { extraction: null, lucidity: null, symbolic: null, report: null, ocr: null, split: null },
     });
+    const jpeg = await sharp({
+      create: { width: 8, height: 8, channels: 3, background: { r: 10, g: 10, b: 20 } },
+    })
+      .jpeg()
+      .toBuffer();
+    const prepared = await prepareImage(jpeg);
+    const uploaded = await createImageAttachment(userId, keys, prepared);
+    await saveTranscript(userId, keys, uploaded.id, fieldsFromTranscript(`ocr of ${CANARY}`, 0.8));
 
     const stored = await everyStoredValue();
     // The single most important assertion in this codebase, over phase 2's

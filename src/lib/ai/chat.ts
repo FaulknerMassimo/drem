@@ -11,34 +11,45 @@ import { destinationFor } from "./destination";
 import { providerChat } from "./providers";
 import { REPORT_TIMEOUT_MS } from "./providers/http";
 import { resolveRoles } from "./schema";
-import type { AiConfig, ChatMessage, ChatResponse, Destination, InsightRole } from "./types";
+import type {
+  AiConfig,
+  ChatImage,
+  ChatMessage,
+  ChatResponse,
+  Destination,
+  ModelRole,
+} from "./types";
 
 export class RoleNotConfiguredError extends Error {
-  constructor(role: InsightRole) {
+  constructor(role: ModelRole) {
     super(`No model is assigned for ${role}.`);
     this.name = "RoleNotConfiguredError";
   }
 }
 
-const MAX_TOKENS: Record<InsightRole, number> = {
+const MAX_TOKENS: Record<ModelRole, number> = {
   extraction: 2048,
   lucidity: 2048,
   symbolic: 2048,
   report: 4096,
+  ocr: 4096,
+  split: 4096,
 };
 
-const TEMPERATURE: Record<InsightRole, number> = {
+const TEMPERATURE: Record<ModelRole, number> = {
   extraction: 0.1,
   lucidity: 0.5,
   symbolic: 0.6,
   report: 0.4,
+  ocr: 0.1,
+  split: 0.1,
 };
 
 export async function completeRole(
   config: AiConfig,
-  role: InsightRole,
+  role: ModelRole,
   messages: ChatMessage[],
-  options: { json?: boolean } = {},
+  options: { json?: boolean; images?: ChatImage[] } = {},
 ): Promise<{ response: ChatResponse; destination: Destination }> {
   const destination = destinationFor(config, role);
   if (!destination.configured) throw new RoleNotConfiguredError(role);
@@ -47,7 +58,7 @@ export async function completeRole(
   const provider = config.providers.find((candidate) => candidate.id === assignment?.providerId);
   if (!provider || !assignment) throw new RoleNotConfiguredError(role);
 
-  const timeoutMs = role === "report" ? REPORT_TIMEOUT_MS : undefined;
+  const timeoutMs = role === "report" || role === "ocr" ? REPORT_TIMEOUT_MS : undefined;
   const response = await providerChat(
     provider,
     {
@@ -56,6 +67,7 @@ export async function completeRole(
       maxTokens: MAX_TOKENS[role],
       temperature: TEMPERATURE[role],
       json: options.json,
+      images: options.images,
     },
     globalThis.fetch,
     timeoutMs,

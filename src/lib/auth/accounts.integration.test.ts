@@ -9,7 +9,7 @@
  */
 import { afterAll, beforeEach, describe, expect, it } from "vitest";
 import { execFileSync } from "node:child_process";
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { eq, sql } from "drizzle-orm";
 import { db } from "@/db";
 import {
@@ -278,6 +278,23 @@ describe("what a stolen database actually contains", () => {
       }),
     });
 
+    const attachmentId = randomUUID();
+    await db.insert(attachments).values({
+      id: attachmentId,
+      userId,
+      dreamId,
+      kind: "image",
+      mimeType: "image/jpeg",
+      byteSize: 32,
+      sha256: createHash("sha256").update(CANARY).digest(),
+      storageKey: `${userId}/${attachmentId}`,
+      transcriptEnc: encrypt(keys.field, `ocr: ${CANARY}`, {
+        table: "attachments",
+        column: "transcript_enc",
+        id: attachmentId,
+      }),
+    });
+
     await db
       .update(settings)
       .set({
@@ -294,7 +311,7 @@ describe("what a stolen database actually contains", () => {
                 enabled: true,
               },
             ],
-            roles: { extraction: null, lucidity: null, symbolic: null, report: null },
+            roles: { extraction: null, lucidity: null, symbolic: null, report: null, ocr: null, split: null },
           }),
           { table: "settings", column: "ai_config_enc", id: userId },
         ),

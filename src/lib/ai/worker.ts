@@ -23,6 +23,7 @@ import {
   claimNextJob,
   completeJob,
   failJob,
+  parseAttachmentPayload,
   parseDreamPayload,
   parseReportPayload,
   reclaimStuckJobs,
@@ -41,6 +42,13 @@ import {
 } from "./prompts";
 import { ProviderError } from "./providers/errors";
 import type { AiConfig, InsightRole } from "./types";
+import {
+  CaptureSkipError,
+  publicCaptureError,
+  runOcrJob,
+  runTranscribeJob,
+} from "@/lib/capture/process";
+import { markAttachmentStatus } from "@/lib/capture/attachments";
 
 type DrainResult = "done" | "empty" | "locked";
 
@@ -83,11 +91,16 @@ export async function processNextJob(): Promise<DrainResult> {
     await completeJob(job.id);
     return "done";
   } catch (error) {
+    const attachmentId = captureAttachmentId(job);
     if (error instanceof SkipError || error instanceof RoleNotConfiguredError) {
       await skipJob(job.id, error.message);
+      if (attachmentId) await markAttachmentStatus(job.userId, attachmentId, "skipped");
       return "done";
     }
-    await failJob(job.id, job.attempts, publicError(error));
+    await failJob(job.id, job.attempts, publicError(error, job.kind));
+    if (attachmentId && job.attempts >= 3) {
+      await markAttachmentStatus(job.userId, attachmentId, "failed");
+    }
     return "done";
   } finally {
     releaseJobKeys(resolved);
@@ -102,6 +115,28 @@ class SkipError extends Error {
 }
 
 async function runJob(job: JobRecord, keys: UserKeys): Promise<void> {
+  if (job.kind === "ocr_attachment") {
+    const { attachmentId } = parseAttachmentPayload(job.payload);
+    try {
+      await runOcrJob(job.userId, keys, attachmentId);
+    } catch (error) {
+      if (error instanceof CaptureSkipError) throw new SkipError(error.message);
+      throw error;
+    }
+    return;
+  }
+
+  if (job.kind === "transcribe_attachment") {
+    const { attachmentId } = parseAttachmentPayload(job.payload);
+    try {
+      await runTranscribeJob(job.userId, keys, attachmentId);
+    } catch (error) {
+      if (error instanceof CaptureSkipError) throw new SkipError(error.message);
+      throw error;
+    }
+    return;
+  }
+
   const config = await loadAiConfig(job.userId, keys);
 
   if (job.kind === "period_report") {
@@ -258,7 +293,19 @@ function clipInsight(text: string): string {
   return trimmed.slice(0, MAX_INSIGHT_CHARS);
 }
 
-function publicError(error: unknown): string {
+function captureAttachmentId(job: JobRecord): string | null {
+  if (job.kind !== "ocr_attachment" && job.kind !== "transcribe_attachment") return null;
+  try {
+    return parseAttachmentPayload(job.payload).attachmentId;
+  } catch {
+    return null;
+  }
+}
+
+function publicError(error: unknown, kind: JobRecord["kind"]): string {
+  if (kind === "ocr_attachment" || kind === "transcribe_attachment") {
+    return publicCaptureError(error);
+  }
   if (error instanceof RoleNotConfiguredError) return error.message;
   if (error instanceof ProviderError) return error.message;
   if (error instanceof Error && error.message === "The model did not return JSON.") {

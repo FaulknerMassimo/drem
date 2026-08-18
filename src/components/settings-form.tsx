@@ -5,16 +5,17 @@ import { FormError } from "@/components/form-error";
 import { SubmitButton } from "@/components/submit-button";
 import { saveAiSettingsAction, testProviderAction } from "@/lib/ai/actions";
 import type { SettingsFormState, TestFormState } from "@/lib/ai/form-state";
-import { INSIGHT_KIND_LABELS, PROVIDER_KIND_HINTS, PROVIDER_KIND_LABELS } from "@/lib/ai/labels";
+import { MODEL_ROLE_HINTS, MODEL_ROLE_LABELS, PROVIDER_KIND_HINTS, PROVIDER_KIND_LABELS } from "@/lib/ai/labels";
 import { defaultUrlFor, emptyRoles } from "@/lib/ai/schema";
 import { CSRF_FIELD } from "@/lib/security/constants";
-import { INSIGHT_ROLES } from "@/lib/ai/types";
+import { CAPTURE_ROLES, INSIGHT_ROLES, MODEL_ROLES } from "@/lib/ai/types";
 import type {
   PublicAiConfig,
   PublicProvider,
   ProviderKind,
   RoleAssignment,
   RoleMap,
+  ModelRole,
 } from "@/lib/ai/types";
 
 interface DraftProvider extends PublicProvider {
@@ -57,7 +58,7 @@ export function SettingsForm({
           apiKey: apiKey.trim() || undefined,
         })),
         roles: Object.fromEntries(
-          INSIGHT_ROLES.map((role) => {
+          MODEL_ROLES.map((role) => {
             const assignment = roles[role];
             if (!assignment?.providerId || !assignment.model.trim()) return [role, null];
             return [role, { providerId: assignment.providerId, model: assignment.model.trim() }];
@@ -117,12 +118,32 @@ export function SettingsForm({
         <input type="hidden" name="config" value={payload} />
 
         <div className="space-y-4">
-          <h2 className="text-lg font-medium">Model roles</h2>
+          <h2 className="text-lg font-medium">Insight roles</h2>
           <p className="text-sm text-ink-400">
             Each insight kind is opt-in. Nothing is sent until a model is assigned
             here and you confirm the destination on the entry itself.
           </p>
           {INSIGHT_ROLES.map((role) => (
+            <RoleRow
+              key={role}
+              role={role}
+              assignment={roles[role]}
+              providers={providers.filter((provider) => provider.enabled)}
+              models={models}
+              onChange={(assignment) =>
+                setRoles((current) => ({ ...current, [role]: assignment }))
+              }
+            />
+          ))}
+        </div>
+
+        <div className="space-y-4">
+          <h2 className="text-lg font-medium">Capture roles</h2>
+          <p className="text-sm text-ink-400">
+            Page reading needs a vision-capable model. Splitting a log that
+            contains several dreams is text-only.
+          </p>
+          {CAPTURE_ROLES.map((role) => (
             <RoleRow
               key={role}
               role={role}
@@ -266,7 +287,7 @@ function RoleRow({
   models,
   onChange,
 }: {
-  role: (typeof INSIGHT_ROLES)[number];
+  role: ModelRole;
   assignment: RoleAssignment | null;
   providers: DraftProvider[];
   models: Record<string, string[]>;
@@ -278,7 +299,8 @@ function RoleRow({
   return (
     <div className="grid gap-3 rounded-lg border border-ink-800 p-4 sm:grid-cols-[1fr_1fr_1fr] sm:items-end">
       <div>
-        <p className="text-sm font-medium text-ink-200">{INSIGHT_KIND_LABELS[role]}</p>
+        <p className="text-sm font-medium text-ink-200">{MODEL_ROLE_LABELS[role]}</p>
+        <p className="mt-1 text-xs text-ink-400">{MODEL_ROLE_HINTS[role]}</p>
       </div>
       <div>
         <label className="label" htmlFor={`provider-${role}`}>
@@ -346,7 +368,7 @@ function newProvider(kind: ProviderKind): DraftProvider {
 
 function stripProvider(roles: RoleMap, providerId: string): RoleMap {
   const next = { ...emptyRoles(), ...roles };
-  for (const role of INSIGHT_ROLES) {
+  for (const role of MODEL_ROLES) {
     if (next[role]?.providerId === providerId) next[role] = null;
   }
   return next;

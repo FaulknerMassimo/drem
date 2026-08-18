@@ -9,9 +9,11 @@
 import { z } from "zod";
 import {
   INSIGHT_ROLES,
+  MODEL_ROLES,
   PROVIDER_KINDS,
   type AiConfig,
   type InsightRole,
+  type ModelRole,
   type ProviderConfig,
   type PublicAiConfig,
   type RoleMap,
@@ -44,6 +46,9 @@ export const aiConfigSchema = z.object({
     lucidity: assignmentSchema,
     symbolic: assignmentSchema,
     report: assignmentSchema,
+    // Optional so a config blob written before these roles existed still loads.
+    ocr: assignmentSchema.optional(),
+    split: assignmentSchema.optional(),
   }),
 });
 
@@ -53,6 +58,8 @@ export function emptyRoles(): RoleMap {
     lucidity: null,
     symbolic: null,
     report: null,
+    ocr: null,
+    split: null,
   };
 }
 
@@ -89,7 +96,12 @@ export function parseAiConfig(value: unknown): AiConfig {
       baseUrl: provider.baseUrl || defaultUrlFor(provider.kind),
       apiKey: provider.apiKey?.trim() ? provider.apiKey.trim() : undefined,
     })),
-    roles: parsed.roles,
+    roles: {
+      ...emptyRoles(),
+      ...parsed.roles,
+      ocr: parsed.roles.ocr ?? null,
+      split: parsed.roles.split ?? null,
+    },
   };
 }
 
@@ -119,8 +131,8 @@ export function resolveRoles(config: AiConfig): RoleMap {
   const usable = new Set(
     config.providers.filter((provider) => provider.enabled).map((provider) => provider.id),
   );
-  const roles = { ...config.roles };
-  for (const role of INSIGHT_ROLES) {
+  const roles = { ...emptyRoles(), ...config.roles };
+  for (const role of MODEL_ROLES) {
     const assignment = roles[role];
     if (assignment && !usable.has(assignment.providerId)) {
       roles[role] = null;
@@ -145,4 +157,8 @@ export function publicAiConfig(config: AiConfig): PublicAiConfig {
 
 export function isInsightRole(value: string): value is InsightRole {
   return (INSIGHT_ROLES as readonly string[]).includes(value);
+}
+
+export function isModelRole(value: string): value is ModelRole {
+  return (MODEL_ROLES as readonly string[]).includes(value);
 }

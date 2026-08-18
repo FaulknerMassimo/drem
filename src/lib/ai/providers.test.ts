@@ -60,6 +60,24 @@ describe("Ollama adapter", () => {
     await ollamaChat(config, { ...chat, json: true }, fetchImpl as unknown as typeof fetch);
   });
 
+  it("attaches images to the last user message as raw base64", async () => {
+    const fetchImpl = vi.fn(async (_url: string | URL | Request, init?: RequestInit) => {
+      const body = JSON.parse(String(init?.body));
+      const user = body.messages.find((message: { role: string }) => message.role === "user");
+      expect(user.images).toEqual([Buffer.from("page").toString("base64")]);
+      expect(user.content).toBe("secret dream text");
+      return jsonResponse({ message: { content: "{}" } });
+    });
+    await ollamaChat(
+      config,
+      {
+        ...chat,
+        images: [{ mimeType: "image/jpeg", bytes: Buffer.from("page") }],
+      },
+      fetchImpl as unknown as typeof fetch,
+    );
+  });
+
   it("lists models from /api/tags without sending a prompt", async () => {
     const fetchImpl = vi.fn(async (url: string | URL | Request) => {
       expect(String(url)).toBe("http://127.0.0.1:11434/api/tags");
