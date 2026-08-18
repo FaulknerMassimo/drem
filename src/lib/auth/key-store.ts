@@ -63,6 +63,20 @@ export function getKeys(
   return entry.keys;
 }
 
+/**
+ * Keys for a user who has any live session in this process.
+ *
+ * Used by the job worker: queued work carries identifiers, not keys, and
+ * re-reads them here. Does not slide the session deadline — a long model call
+ * must not keep someone logged in past their idle timeout.
+ */
+export function peekKeysForUser(userId: string, now = Date.now()): UserKeys | null {
+  for (const entry of store.values()) {
+    if (entry.userId === userId && entry.expiresAt > now) return entry.keys;
+  }
+  return null;
+}
+
 export function dropKeys(sessionId: string): void {
   const entry = store.get(sessionId);
   if (!entry) return;

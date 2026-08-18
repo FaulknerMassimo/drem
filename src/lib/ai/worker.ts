@@ -1,0 +1,268 @@
+/**
+ * In-process worker for queued insight jobs.
+ *
+ * Runs inside the Next process because that is where the unwrapped data key
+ * lives. Jobs are identifiers; this module re-reads the dream, decrypts it,
+ * calls the model, and writes the ciphertext back. A drain is kicked after
+ * enqueue and on each app-layout render, so work proceeds while a session is
+ * live and stalls cleanly when it is not.
+ */
+import "server-only";
+import { recordAuthEvent } from "@/lib/auth/audit";
+import type { UserKeys } from "@/lib/crypto/envelope";
+import { getDream, dreamsInRange } from "@/lib/journal/dreams";
+import { completeRole, RoleNotConfiguredError } from "./chat";
+import { loadAiConfig } from "./config";
+import {
+  latestExtractionsForDreams,
+  latestInsightForDream,
+  saveInsight,
+} from "./insights";
+import { parseExtraction, serialiseExtraction } from "./json";
+import {
+  claimNextJob,
+  completeJob,
+  failJob,
+  parseDreamPayload,
+  parseReportPayload,
+  reclaimStuckJobs,
+  skipJob,
+  unclaimJob,
+  type JobRecord,
+} from "./jobs";
+import { releaseJobKeys, resolveJobKeys } from "./keys";
+import {
+  MAX_INSIGHT_CHARS,
+  MAX_REPORT_DREAMS,
+  messagesFor,
+  PROMPT_VERSIONS,
+  reportMessages,
+  type DreamPromptInput,
+} from "./prompts";
+import { ProviderError } from "./providers/errors";
+import type { AiConfig, InsightRole } from "./types";
+
+type DrainResult = "done" | "empty" | "locked";
+
+const globalForWorker = globalThis as unknown as { dremAiDraining?: boolean };
+
+export function kickWorker(): void {
+  if (globalForWorker.dremAiDraining) return;
+  globalForWorker.dremAiDraining = true;
+  void drain()
+    .catch((error) => {
+      console.error("[ai] worker drain failed: %s", error instanceof Error ? error.message : error);
+    })
+    .finally(() => {
+      globalForWorker.dremAiDraining = false;
+    });
+}
+
+async function drain(): Promise<void> {
+  await reclaimStuckJobs();
+  for (let i = 0; i < 20; i++) {
+    const result = await processNextJob();
+    if (result !== "done") break;
+  }
+}
+
+export async function processNextJob(): Promise<DrainResult> {
+  const job = await claimNextJob();
+  if (!job) return "empty";
+
+  const resolved = await resolveJobKeys(job.userId);
+  if (!resolved) {
+    // There is nothing to decrypt with until a session appears (or background
+    // processing is enabled). That is not a failure — leave the job pending.
+    await unclaimJob(job.id, "Waiting for an unlocked session");
+    return "locked";
+  }
+
+  try {
+    await runJob(job, resolved.keys);
+    await completeJob(job.id);
+    return "done";
+  } catch (error) {
+    if (error instanceof SkipError || error instanceof RoleNotConfiguredError) {
+      await skipJob(job.id, error.message);
+      return "done";
+    }
+    await failJob(job.id, job.attempts, publicError(error));
+    return "done";
+  } finally {
+    releaseJobKeys(resolved);
+  }
+}
+
+class SkipError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "SkipError";
+  }
+}
+
+async function runJob(job: JobRecord, keys: UserKeys): Promise<void> {
+  const config = await loadAiConfig(job.userId, keys);
+
+  if (job.kind === "period_report") {
+    const payload = parseReportPayload(job.payload);
+    await runReport(job.userId, keys, config, payload.periodStart, payload.periodEnd);
+    return;
+  }
+
+  const { dreamId } = parseDreamPayload(job.payload);
+  const role =
+    job.kind === "extract_insight"
+      ? "extraction"
+      : job.kind === "lucidity_insight"
+        ? "lucidity"
+        : "symbolic";
+  await runDreamInsight(job.userId, keys, config, dreamId, role);
+}
+
+async function runDreamInsight(
+  userId: string,
+  keys: UserKeys,
+  config: AiConfig,
+  dreamId: string,
+  role: Exclude<InsightRole, "report">,
+): Promise<void> {
+  const dream = await getDream(userId, keys, dreamId);
+  if (!dream) throw new SkipError("That entry no longer exists.");
+  if (!dream.body?.trim()) throw new SkipError("Nothing to analyse.");
+
+  const input = await dreamInput(userId, keys, dream, role !== "extraction");
+  const prompt = messagesFor(role, input);
+  const { response, destination } = await completeRole(
+    config,
+    role,
+    [
+      { role: "system", content: prompt.system },
+      { role: "user", content: prompt.user },
+    ],
+    { json: role === "extraction" },
+  );
+
+  const content =
+    role === "extraction"
+      ? serialiseExtraction(parseExtraction(response.text))
+      : clipInsight(response.text);
+
+  await saveInsight(userId, keys, {
+    dreamId,
+    kind: role,
+    provider: destination.providerName,
+    model: destination.model,
+    promptVersion: PROMPT_VERSIONS[role],
+    content,
+    inputTokens: response.inputTokens,
+    outputTokens: response.outputTokens,
+  });
+
+  await recordAuthEvent("ai_request", {
+    userId,
+    detail: {
+      kind: role,
+      provider: destination.providerKind,
+      host: destination.host,
+      leavesMachine: destination.leavesMachine,
+    },
+  });
+}
+
+async function runReport(
+  userId: string,
+  keys: UserKeys,
+  config: AiConfig,
+  periodStart: string,
+  periodEnd: string,
+): Promise<void> {
+  const all = (await dreamsInRange(userId, keys, periodStart, periodEnd)).filter(
+    (dream) => dream.body?.trim() && !dream.isDraft,
+  );
+  if (all.length === 0) throw new SkipError("No written entries in that period.");
+
+  const capped = all.length > MAX_REPORT_DREAMS;
+  const window = capped ? all.slice(-MAX_REPORT_DREAMS) : all;
+  const extractions = await latestExtractionsForDreams(
+    userId,
+    keys,
+    window.map((dream) => dream.id),
+  );
+
+  const inputs: DreamPromptInput[] = window.map((dream) => ({
+    date: dream.dreamDate,
+    title: dream.title,
+    body: dream.body ?? "",
+    isLucid: dream.isLucid,
+    lucidity: dream.lucidity,
+    vividness: dream.vividness,
+    tags: dream.tags,
+    extraction: extractions.get(dream.id)?.content ?? null,
+  }));
+
+  const prompt = reportMessages(periodStart, periodEnd, inputs, capped);
+  const { response, destination } = await completeRole(config, "report", [
+    { role: "system", content: prompt.system },
+    { role: "user", content: prompt.user },
+  ]);
+
+  await saveInsight(userId, keys, {
+    kind: "report",
+    periodStart,
+    periodEnd,
+    provider: destination.providerName,
+    model: destination.model,
+    promptVersion: PROMPT_VERSIONS.report,
+    content: clipInsight(response.text),
+    inputTokens: response.inputTokens,
+    outputTokens: response.outputTokens,
+  });
+
+  await recordAuthEvent("ai_request", {
+    userId,
+    detail: {
+      kind: "report",
+      provider: destination.providerKind,
+      host: destination.host,
+      leavesMachine: destination.leavesMachine,
+      entries: window.length,
+    },
+  });
+}
+
+async function dreamInput(
+  userId: string,
+  keys: UserKeys,
+  dream: NonNullable<Awaited<ReturnType<typeof getDream>>>,
+  includeExtraction: boolean,
+): Promise<DreamPromptInput> {
+  const extraction = includeExtraction
+    ? await latestInsightForDream(userId, keys, dream.id, "extraction")
+    : null;
+  return {
+    date: dream.dreamDate,
+    title: dream.title,
+    body: dream.body ?? "",
+    isLucid: dream.isLucid,
+    lucidity: dream.lucidity,
+    vividness: dream.vividness,
+    tags: dream.tags,
+    extraction: extraction?.content ?? null,
+  };
+}
+
+function clipInsight(text: string): string {
+  const trimmed = text.trim();
+  if (trimmed.length <= MAX_INSIGHT_CHARS) return trimmed;
+  return trimmed.slice(0, MAX_INSIGHT_CHARS);
+}
+
+function publicError(error: unknown): string {
+  if (error instanceof RoleNotConfiguredError) return error.message;
+  if (error instanceof ProviderError) return error.message;
+  if (error instanceof Error && error.message === "The model did not return JSON.") {
+    return error.message;
+  }
+  return "The model request failed.";
+}

@@ -262,6 +262,45 @@ describe("what a stolen database actually contains", () => {
       nameBidx: tagFingerprint(keys, CANARY),
     });
 
+    const insightId = randomUUID();
+    await db.insert(insights).values({
+      id: insightId,
+      userId,
+      dreamId,
+      kind: "extraction",
+      provider: "ollama",
+      model: "llama3.2",
+      promptVersion: "extraction.v1",
+      contentEnc: encrypt(keys.field, `insight: ${CANARY}`, {
+        table: "insights",
+        column: "content_enc",
+        id: insightId,
+      }),
+    });
+
+    await db
+      .update(settings)
+      .set({
+        aiConfigEnc: encrypt(
+          keys.field,
+          JSON.stringify({
+            providers: [
+              {
+                id: "openai",
+                kind: "openai",
+                name: "OpenAI",
+                baseUrl: "https://api.openai.com/v1",
+                apiKey: `sk-${CANARY}`,
+                enabled: true,
+              },
+            ],
+            roles: { extraction: null, lucidity: null, symbolic: null, report: null },
+          }),
+          { table: "settings", column: "ai_config_enc", id: userId },
+        ),
+      })
+      .where(eq(settings.userId, userId));
+
     return execFileSync(
       "docker",
       ["exec", "drem-db-1", "pg_dump", "-U", "drem", "-d", "drem"],

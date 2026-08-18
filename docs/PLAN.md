@@ -77,7 +77,7 @@ current one's tests pass.
       picker, lucid nights visually distinct, click-to-filter), recall and lucid
       streaks, **3am capture mode** (deep-red/black single-field screen feeding a
       draft queue). Verified end to end over HTTP against a live database.
-- [ ] **3 — AI insights.** Provider layer with adapters and per-role model
+- [x] **3 — AI insights.** Provider layer with adapters and per-role model
       config, settings UI with connection test, the four insight kinds
       (extraction → lucidity coach → symbolic reading → period reports), job
       queue, and a visible badge naming where a request is about to go before

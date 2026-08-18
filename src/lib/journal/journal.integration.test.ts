@@ -26,6 +26,8 @@ import {
 import { DecryptionError } from "@/lib/crypto/aead";
 import type { UserKeys } from "@/lib/crypto/envelope";
 import { createInitialAccount } from "@/lib/auth/accounts";
+import { saveAiConfig } from "@/lib/ai/config";
+import { saveInsight } from "@/lib/ai/insights";
 import {
   captureDream,
   createDream,
@@ -557,7 +559,7 @@ describe("what a stolen database actually contains", () => {
       noRecall: false,
       notes: `night notes: ${CANARY}`,
     });
-    await createDream(
+    const dreamId = await createDream(
       userId,
       keys,
       dreamInput({
@@ -568,6 +570,27 @@ describe("what a stolen database actually contains", () => {
       }),
     );
     await captureDream(userId, keys, "2026-08-18", `at 4am: ${CANARY}`);
+    await saveInsight(userId, keys, {
+      dreamId,
+      kind: "lucidity",
+      provider: "Ollama",
+      model: "llama3.2",
+      promptVersion: "lucidity.v1",
+      content: `coach notes about ${CANARY}`,
+    });
+    await saveAiConfig(userId, keys, {
+      providers: [
+        {
+          id: "openai",
+          kind: "openai",
+          name: "OpenAI",
+          baseUrl: "https://api.openai.com/v1",
+          apiKey: `sk-${CANARY}`,
+          enabled: true,
+        },
+      ],
+      roles: { extraction: null, lucidity: null, symbolic: null, report: null },
+    });
 
     const stored = await everyStoredValue();
     // The single most important assertion in this codebase, over phase 2's

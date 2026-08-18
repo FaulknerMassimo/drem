@@ -1,5 +1,9 @@
 import { notFound } from "next/navigation";
+import { InsightPanel } from "@/components/insight-panel";
 import { sessionOrRedirect } from "@/lib/auth/session";
+import { loadDestinations } from "@/lib/ai/config";
+import { insightsForDream } from "@/lib/ai/insights";
+import { pendingDreamJobs } from "@/lib/ai/jobs";
 import { describeDate } from "@/lib/journal/dates";
 import { getDream } from "@/lib/journal/dreams";
 import {
@@ -30,6 +34,12 @@ export default async function DreamPage({
   const session = await sessionOrRedirect();
   const dream = await getDream(session.userId, session.keys, id);
   if (!dream) notFound();
+
+  const [insights, pending, destinations] = await Promise.all([
+    insightsForDream(session.userId, session.keys, dream.id),
+    pendingDreamJobs(session.userId, dream.id),
+    loadDestinations(session.userId, session.keys),
+  ]);
 
   return (
     <article className="space-y-6">
@@ -129,6 +139,18 @@ export default async function DreamPage({
           Delete
         </a>
       </div>
+
+      <InsightPanel
+        dreamId={dream.id}
+        hasBody={Boolean(dream.body?.trim())}
+        insights={insights}
+        pending={pending}
+        destinations={{
+          extraction: destinations.extraction,
+          lucidity: destinations.lucidity,
+          symbolic: destinations.symbolic,
+        }}
+      />
     </article>
   );
 }

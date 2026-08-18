@@ -292,6 +292,34 @@ export async function dreamsForNight(
   return rows.map((row) => decodeDream(keys, row, tagsByDream.get(row.id) ?? []));
 }
 
+/**
+ * Entries in a closed date range, oldest first.
+ *
+ * Used by period reports. Drafts with no body are still returned — the caller
+ * decides whether they are worth sending to a model.
+ */
+export async function dreamsInRange(
+  userId: string,
+  keys: UserKeys,
+  from: IsoDate,
+  to: IsoDate,
+): Promise<DreamRecord[]> {
+  const rows = await db
+    .select()
+    .from(dreams)
+    .where(
+      and(
+        eq(dreams.userId, userId),
+        gte(dreams.dreamDate, from),
+        lte(dreams.dreamDate, to),
+      ),
+    )
+    .orderBy(asc(dreams.dreamDate), asc(dreams.createdAt));
+
+  const tagsByDream = await tagsForDreams(userId, keys, rows.map((row) => row.id));
+  return rows.map((row) => decodeDream(keys, row, tagsByDream.get(row.id) ?? []));
+}
+
 export interface DreamPage {
   items: DreamSummary[];
   total: number;

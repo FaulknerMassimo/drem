@@ -93,6 +93,7 @@ src/lib/crypto/     aead, kdf, envelope, blind-index, totp, recovery
 src/lib/security/   headers, csrf, rate-limit, tokens
 src/lib/auth/       accounts, session, key-store, pending, one-shot, actions
 src/lib/journal/    nights, dreams, tags, stats + pure: dates, heatmap, streaks
+src/lib/ai/         providers, encrypted config, prompts, insights, job worker
 src/db/schema.ts    all 15 tables, with the reasoning in comments
 src/app/(auth)/     setup, login, TOTP verify
 src/app/(app)/      everything behind a session

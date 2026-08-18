@@ -7,6 +7,7 @@ import {
   dropKeys,
   dropKeysForUser,
   getKeys,
+  peekKeysForUser,
   putKeys,
   sweepKeys,
 } from "./key-store";
@@ -103,5 +104,18 @@ describe("session key store", () => {
     putKeys("s1", "user-1", keysFor(), TTL);
     __clearKeyStore();
     expect(activeKeyCount()).toBe(0);
+  });
+
+  it("finds a live session's keys by user without sliding the deadline", () => {
+    const keys = keysFor();
+    putKeys("session-1", "user-1", keys, TTL, 0);
+    expect(peekKeysForUser("user-1", 1)?.field.equals(keys.field)).toBe(true);
+    // A peek must not extend the idle window the way getKeys does.
+    expect(getKeys("session-1", TTL, TTL + 1)).toBeNull();
+  });
+
+  it("does not return another user's keys", () => {
+    putKeys("s1", "user-1", keysFor(), TTL);
+    expect(peekKeysForUser("user-2")).toBeNull();
   });
 });

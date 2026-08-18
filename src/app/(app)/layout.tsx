@@ -4,6 +4,7 @@ import { logoutAction } from "@/lib/auth/actions";
 import { currentSession, needsSetup } from "@/lib/auth/session";
 import { countDrafts } from "@/lib/journal/dreams";
 import { nightDateFor } from "@/lib/journal/dates";
+import { kickWorker } from "@/lib/ai/worker";
 
 export const dynamic = "force-dynamic";
 
@@ -26,6 +27,8 @@ export default async function AppLayout({
 
   const drafts = await countDrafts(session.userId);
   const tonight = nightDateFor();
+  // Drain any jobs that were waiting on this session's keys.
+  kickWorker();
 
   return (
     <div className="min-h-dvh">
@@ -49,6 +52,12 @@ export default async function AppLayout({
               </a>
               <a href={`/night/${tonight}`} className="hover:text-ink-200">
                 Tonight
+              </a>
+              <a href="/reports" className="hover:text-ink-200">
+                Reports
+              </a>
+              <a href="/settings" className="hover:text-ink-200">
+                Settings
               </a>
             </nav>
           </div>
