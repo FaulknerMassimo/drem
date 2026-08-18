@@ -1,0 +1,67 @@
+services:
+  db:
+    image: pgvector/pgvector:pg17
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: drem
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}
+      POSTGRES_DB: drem
+    volumes:
+      - db-data:/var/lib/postgresql/data
+    # Not published to the host: only the app needs to reach the database.
+    expose:
+      - "5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U drem -d drem"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  whisper:
+    image: fedirz/faster-whisper-server:latest-cpu
+    restart: unless-stopped
+    environment:
+      # `base` is the accuracy/speed sweet spot on CPU for short dictations.
+      WHISPER__MODEL: Systran/faster-whisper-base
+      WHISPER__INFERENCE_DEVICE: cpu
+    volumes:
+      - whisper-cache:/root/.cache/huggingface
+    expose:
+      - "8000"
+
+  app:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile
+    restart: unless-stopped
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      DATABASE_URL: postgresql://drem:${POSTGRES_PASSWORD}@db:5432/drem
+      MASTER_KEY: ${MASTER_KEY:?run `npm run keygen` and put the result in .env}
+      APP_ORIGIN: ${APP_ORIGIN:-http://localhost:3000}
+      # Ollama stays on the host so it keeps GPU access; reach it via the gateway.
+      OLLAMA_BASE_URL: http://host.docker.internal:11434
+      WHISPER_BASE_URL: http://whisper:8000
+      ALLOW_BACKGROUND_PROCESSING: ${ALLOW_BACKGROUND_PROCESSING:-false}
+      SEARCH_BACKEND: ${SEARCH_BACKEND:-encrypted}
+      UPLOAD_DIR: /data/uploads
+      NODE_ENV: production
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    ports:
+      - "127.0.0.1:3000:3000"
+    volumes:
+      - uploads:/data/uploads
+    deploy:
+      resources:
+        limits:
+          # Argon2id is configured at 512 MiB per derivation; two concurrent
+          # logins must not push the container into the OOM killer.
+          memory: 2g
+
+volumes:
+  db-data:
+  whisper-cache:
+  uploads:

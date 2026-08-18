@@ -1,0 +1,23 @@
+node_modules/
+.next/
+out/
+build/
+dist/
+*.tsbuildinfo
+next-env.d.ts
+
+# Secrets — MASTER_KEY lives here. Losing this file makes every journal
+# entry permanently unrecoverable; leaking it removes one of the two
+# factors protecting them.
+.env
+.env.local
+.env*.local
+!.env.example
+
+# Encrypted attachment blobs and database volumes
+/data/
+/uploads/
+*.pgdump
+
+.DS_Store
+coverage/

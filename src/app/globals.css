@@ -1,0 +1,77 @@
+@import "tailwindcss";
+
+/*
+ * A journal written at 3am on a phone, in the dark. The palette is dark by
+ * default and low-contrast on purpose: bright white on black is painful at that
+ * hour and wakes you up enough to lose the dream.
+ */
+@theme {
+  --color-ink-950: #07070c;
+  --color-ink-900: #0b0b12;
+  --color-ink-850: #10101a;
+  --color-ink-800: #161623;
+  --color-ink-700: #22223a;
+  --color-ink-600: #33334f;
+  --color-ink-400: #6b6b8a;
+  --color-ink-300: #9a9ab8;
+  --color-ink-200: #c4c4dc;
+  --color-ink-100: #e6e6f4;
+
+  /* Lucidity, and the heatmap's accent. */
+  --color-lucid-500: #7c6cf0;
+  --color-lucid-400: #9b8cf7;
+  --color-lucid-300: #b8adfb;
+
+  --color-warn-500: #d8763f;
+  --color-danger-500: #d9534f;
+  --color-ok-500: #4caf7d;
+
+  --font-sans: ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
+}
+
+html {
+  color-scheme: dark;
+}
+
+body {
+  background-color: var(--color-ink-950);
+  color: var(--color-ink-100);
+  font-family: var(--font-sans);
+  -webkit-font-smoothing: antialiased;
+}
+
+/* Keyboard focus must stay obvious; this app is used half-asleep. */
+:focus-visible {
+  outline: 2px solid var(--color-lucid-400);
+  outline-offset: 2px;
+}
+
+@layer components {
+  .field {
+    @apply w-full rounded-lg border border-ink-700 bg-ink-850 px-3 py-2 text-ink-100
+           placeholder:text-ink-400 focus:border-lucid-400 focus:outline-none;
+  }
+
+  .btn {
+    @apply inline-flex items-center justify-center gap-2 rounded-lg px-4 py-2
+           font-medium transition-colors disabled:cursor-not-allowed disabled:opacity-50;
+  }
+
+  /* Composed in markup as `btn btn-primary` -- Tailwind v4 cannot @apply a
+     class that is itself defined in the components layer. */
+  .btn-primary {
+    @apply bg-lucid-500 text-white hover:bg-lucid-400;
+  }
+
+  .btn-ghost {
+    @apply border border-ink-700 text-ink-200 hover:bg-ink-800;
+  }
+
+  .label {
+    @apply mb-1.5 block text-sm font-medium text-ink-300;
+  }
+
+  .card {
+    @apply rounded-xl border border-ink-800 bg-ink-900 p-6;
+  }
+}

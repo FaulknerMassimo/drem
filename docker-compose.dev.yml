@@ -1,0 +1,19 @@
+# Development overlay. Apply explicitly:
+#   docker compose -f docker-compose.yml -f docker-compose.dev.yml up -d db whisper
+#
+# It exists so `npm run dev` and `npm run db:migrate` can reach the database
+# from the host. The base compose file keeps these ports closed, which is the
+# right default for an actual deployment.
+services:
+  db:
+    ports:
+      # Loopback only: never reachable from the network, even on this machine.
+      - "127.0.0.1:5432:5432"
+
+  whisper:
+    ports:
+      - "127.0.0.1:8000:8000"
+
+  # The app runs via `npm run dev` on the host during development.
+  app:
+    profiles: ["never"]
