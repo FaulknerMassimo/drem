@@ -9,7 +9,7 @@
 import "server-only";
 import { destinationFor } from "./destination";
 import { providerChat } from "./providers";
-import { REPORT_TIMEOUT_MS, SCAN_TIMEOUT_MS } from "./providers/http";
+import { OCR_TIMEOUT_MS, REPORT_TIMEOUT_MS, SCAN_TIMEOUT_MS } from "./providers/http";
 import { resolveRoles } from "./schema";
 import type {
   AiConfig,
@@ -72,9 +72,11 @@ export async function completeRole(
   const timeoutMs =
     role === "signs"
       ? SCAN_TIMEOUT_MS
-      : role === "report" || role === "ocr"
-        ? REPORT_TIMEOUT_MS
-        : undefined;
+      : role === "ocr"
+        ? OCR_TIMEOUT_MS
+        : role === "report"
+          ? REPORT_TIMEOUT_MS
+          : undefined;
   const response = await providerChat(
     provider,
     {

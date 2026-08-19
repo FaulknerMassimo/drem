@@ -61,6 +61,43 @@ const ocrSchema = z
   })
   .passthrough();
 
+const MONTHS = [
+  "january", "february", "march", "april", "may", "june",
+  "july", "august", "september", "october", "november", "december",
+];
+
+/**
+ * The date the page is dated, not the date it was photographed.
+ *
+ * A journal page is headed the way a person writes a date -- "12 March 2026",
+ * "March 12, 2026" -- and the model transcribes it literally, as instructed.
+ * Insisting on ISO here meant every imported page silently fell back to
+ * tonight's night date, which is precisely wrong for the case this feature
+ * exists to serve: working through a stack of old pages.
+ *
+ * Only month-name spellings are read. All-numeric forms are left alone because
+ * 03/04/2026 is March or April depending on who wrote it, and quietly picking
+ * one would file entries under a date the writer never wrote.
+ */
+function isoDateFrom(value: string | null): string | null {
+  if (!value) return null;
+  // Lowercased before the guard: `isIsoDate` narrows to a branded type, and
+  // the else-branch of that narrowing is `never`.
+  const text = value.toLowerCase();
+  if (isIsoDate(value)) return value;
+
+  const monthIndex = MONTHS.findIndex((month) => text.includes(month.slice(0, 3)));
+  if (monthIndex < 0) return null;
+
+  const numbers = [...text.matchAll(/\d+/g)].map((match) => Number(match[0]));
+  const day = numbers.find((number) => number >= 1 && number <= 31);
+  const year = numbers.find((number) => number >= 1000 && number <= 9999);
+  if (day === undefined || year === undefined) return null;
+
+  const candidate = `${year}-${String(monthIndex + 1).padStart(2, "0")}-${String(day).padStart(2, "0")}`;
+  return isIsoDate(candidate) ? candidate : null;
+}
+
 export function emptyFields(): ExtractedFields {
   return {
     date: { value: null, confidence: null },
@@ -77,7 +114,7 @@ export function parseExtractedFields(text: string): ExtractedFields {
   const record = parsed as Record<string, unknown>;
 
   const dateRaw = stringOrNull(nestedValue(record, "date"));
-  const date = dateRaw && isIsoDate(dateRaw) ? dateRaw : null;
+  const date = isoDateFrom(dateRaw);
 
   const title = stringOrNull(nestedValue(record, "title"));
   const body =
@@ -178,14 +215,43 @@ function stringOrNull(value: unknown): string | null {
   return trimmed.length > 0 ? trimmed : null;
 }
 
+/**
+ * A rating as written on the page, which is rarely a bare number.
+ *
+ * Pages say "Lucidity: fairly clear, maybe a 3", and the model echoes that
+ * phrase verbatim because the prompt tells it to be literal. Refusing anything
+ * that is not already a number throws away a rating the page states plainly.
+ *
+ * Prose is only mined when it contains exactly one number in range: two
+ * numbers means the sentence is about something else as well, and a guess
+ * there would be worse than the blank the reviewer can fill in.
+ */
 function intOrNull(value: unknown, min: number, max: number): number | null {
+  if (typeof value === "string") return intOrNull(numberInText(value, min, max), min, max);
   if (typeof value !== "number" || !Number.isFinite(value)) return null;
   const rounded = Math.round(value);
   if (rounded < min || rounded > max) return null;
   return rounded;
 }
 
+function numberInText(text: string, min: number, max: number): number | null {
+  const inRange = [...text.matchAll(/-?\d+(?:\.\d+)?/g)]
+    .map((match) => Number(match[0]))
+    .filter((value) => Number.isFinite(value) && value >= min && value <= max);
+  return inRange.length === 1 ? inRange[0]! : null;
+}
+
+/**
+ * Tags as the model actually returns them.
+ *
+ * The prompt asks for an array and a strong model obliges, but a page whose
+ * tag line reads "tags: lighthouse, stairs, hands" invites the model to hand
+ * that line straight back as one string. Returning `[]` for it drops tags the
+ * model read correctly, and drops them silently -- the review screen just
+ * shows an empty box, which reads as "the model could not see the page".
+ */
 function stringList(value: unknown): string[] {
+  if (typeof value === "string") return stringList(value.split(/[,;\n]/));
   if (!Array.isArray(value)) return [];
   const seen = new Set<string>();
   const out: string[] = [];

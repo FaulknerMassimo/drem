@@ -8,7 +8,7 @@
  */
 import "server-only";
 import { randomUUID } from "node:crypto";
-import { and, asc, count, eq, inArray, lte, sql } from "drizzle-orm";
+import { and, asc, count, desc, eq, inArray, lte, sql } from "drizzle-orm";
 import { db } from "@/db";
 import { jobs } from "@/db/schema";
 import { isIsoDate, type IsoDate } from "@/lib/journal/dates";
@@ -326,6 +326,49 @@ export async function enqueueSignScan(
   return id;
 }
 
+/**
+ * What the capture job for one attachment is doing right now.
+ *
+ * The review page needs this because an attachment sits at `running` for the
+ * whole retry budget: a failed attempt puts the job back to `pending` with a
+ * backoff and only the third one flips the attachment to `failed`. Reading the
+ * attachment row alone, the page can say nothing but "Reading the page..." for
+ * a quarter of an hour while the model is unreachable. `lastError` is a
+ * provider message that was already deemed safe to persist -- it names a host
+ * or a status, never a prompt.
+ */
+export interface AttachmentJobProgress {
+  attempts: number;
+  maxAttempts: number;
+  lastError: string | null;
+}
+
+export const MAX_JOB_ATTEMPTS = 3;
+
+export async function attachmentJobProgress(
+  userId: string,
+  attachmentId: string,
+): Promise<AttachmentJobProgress | null> {
+  const [row] = await db
+    .select({ attempts: jobs.attempts, lastError: jobs.lastError })
+    .from(jobs)
+    .where(
+      and(
+        eq(jobs.userId, userId),
+        inArray(jobs.kind, ["ocr_attachment", "transcribe_attachment"]),
+        sql`${jobs.payload}->> 'attachmentId' = ${attachmentId}`,
+      ),
+    )
+    .orderBy(desc(jobs.createdAt))
+    .limit(1);
+  if (!row) return null;
+  return {
+    attempts: row.attempts,
+    maxAttempts: MAX_JOB_ATTEMPTS,
+    lastError: row.lastError,
+  };
+}
+
 export async function openJobCount(userId: string, kind: JobKind): Promise<number> {
   const [row] = await db
     .select({ total: count() })
@@ -395,7 +438,7 @@ export async function skipJob(id: string, reason: string): Promise<void> {
 }
 
 export async function failJob(id: string, attempts: number, reason: string): Promise<void> {
-  const retry = attempts < 3;
+  const retry = attempts < MAX_JOB_ATTEMPTS;
   await db
     .update(jobs)
     .set({

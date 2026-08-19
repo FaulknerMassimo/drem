@@ -98,3 +98,79 @@ describe("split parsing", () => {
     }
   });
 });
+
+describe("fields as a vision model actually writes them", () => {
+  /*
+   * Verbatim from qwen3.8:27b reading a photographed page under the app's own
+   * OCR prompt. The prompt asks for an array of tags and a numeric rating; a
+   * model told to transcribe literally hands back the page's own wording
+   * instead, and every one of these fields used to be dropped on the floor.
+   */
+  const reply = JSON.stringify({
+    date: { value: "12 March 2026", confidence: 0.99 },
+    title: { value: "The lighthouse stairs", confidence: 0.99 },
+    body: { value: "I was climbing a spiral staircase inside a lighthouse.", confidence: 0.98 },
+    tags: { value: "lighthouse, stairs, hands", confidence: 0.99 },
+    lucidity: { value: "fairly clear, maybe a 3", confidence: 0.97 },
+  });
+
+  it("keeps every field the model read", () => {
+    const fields = parseExtractedFields(reply);
+    expect(fields.date.value).toBe("2026-03-12");
+    expect(fields.title.value).toBe("The lighthouse stairs");
+    expect(fields.tags.value).toEqual(["lighthouse", "stairs", "hands"]);
+    expect(fields.lucidity.value).toBe(3);
+    expect(fields.body.confidence).toBeCloseTo(0.98);
+  });
+
+  it("reads a month-name date whichever way round it is written", () => {
+    for (const written of ["12 March 2026", "March 12, 2026", "Mar 12 2026"]) {
+      const fields = parseExtractedFields(JSON.stringify({ date: written, body: "x" }));
+      expect(fields.date.value).toBe("2026-03-12");
+    }
+  });
+
+  it("refuses an all-numeric date rather than guessing the order", () => {
+    // 03/04/2026 is March or April depending on who wrote it. Filing the entry
+    // under a date the writer never wrote is worse than leaving it blank.
+    const fields = parseExtractedFields(JSON.stringify({ date: "03/04/2026", body: "x" }));
+    expect(fields.date.value).toBeNull();
+  });
+
+  it("refuses a day the month does not have", () => {
+    const fields = parseExtractedFields(JSON.stringify({ date: "31 February 2026", body: "x" }));
+    expect(fields.date.value).toBeNull();
+  });
+
+  it("does not mine a rating out of prose holding two candidates", () => {
+    // "woke at 4 ... maybe a 3" leaves two numbers that are both plausible
+    // ratings; guessing between them is worse than the blank the reviewer can
+    // fill in themselves.
+    const fields = parseExtractedFields(
+      JSON.stringify({ lucidity: "woke at 4, lucidity maybe a 3", body: "x" }),
+    );
+    expect(fields.lucidity.value).toBeNull();
+  });
+
+  it("ignores numbers that could not be a rating at all", () => {
+    // "counted 6 fingers, maybe a 3" reads unambiguously once 6 is discarded
+    // for being outside the scale -- the fingers are not the rating.
+    const fields = parseExtractedFields(
+      JSON.stringify({ lucidity: "counted 6 fingers, maybe a 3", body: "x" }),
+    );
+    expect(fields.lucidity.value).toBe(3);
+  });
+
+  it("still takes a plain array and a plain number", () => {
+    const fields = parseExtractedFields(
+      JSON.stringify({ tags: ["lighthouse", "stairs"], lucidity: 4, body: "x" }),
+    );
+    expect(fields.tags.value).toEqual(["lighthouse", "stairs"]);
+    expect(fields.lucidity.value).toBe(4);
+  });
+
+  it("does not invent tags from an empty string", () => {
+    const fields = parseExtractedFields(JSON.stringify({ tags: "  ,  ", body: "x" }));
+    expect(fields.tags.value).toEqual([]);
+  });
+});

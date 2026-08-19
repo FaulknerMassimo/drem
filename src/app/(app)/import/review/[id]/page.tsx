@@ -3,6 +3,7 @@ import { JobRefresh } from "@/components/job-refresh";
 import { ReviewForm } from "@/components/review-form";
 import { sessionOrRedirect } from "@/lib/auth/session";
 import { loadDestinations } from "@/lib/ai/config";
+import { attachmentJobProgress } from "@/lib/ai/jobs";
 import { getAttachment, listInbox } from "@/lib/capture/attachments";
 import { nightDateFor } from "@/lib/journal/dates";
 import { readCsrfToken } from "@/lib/security/csrf-server";
@@ -19,10 +20,11 @@ export default async function ReviewPage({
   const attachment = await getAttachment(session.userId, session.keys, id);
   if (!attachment || attachment.dreamId) notFound();
 
-  const [inbox, destinations, csrfToken] = await Promise.all([
+  const [inbox, destinations, csrfToken, progress] = await Promise.all([
     listInbox(session.userId, session.keys),
     loadDestinations(session.userId, session.keys),
     readCsrfToken(),
+    attachmentJobProgress(session.userId, attachment.id),
   ]);
   const extras = inbox.filter((item) => item.id !== attachment.id);
   const processing = attachment.status === "pending" || attachment.status === "running";
@@ -50,6 +52,7 @@ export default async function ReviewPage({
         defaultDate={nightDateFor()}
         csrfToken={csrfToken}
         splitDestination={destinations.split}
+        progress={progress}
       />
     </div>
   );

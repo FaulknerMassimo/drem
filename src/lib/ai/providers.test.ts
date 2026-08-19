@@ -3,7 +3,7 @@ import { ProviderError } from "./providers/errors";
 import { ollamaChat, ollamaTest } from "./providers/ollama";
 import { openaiChat } from "./providers/openai";
 import { anthropicChat } from "./providers/anthropic";
-import { providerTest } from "./providers";
+import { providerChat, providerTest } from "./providers";
 import type { ChatRequest, ProviderConfig } from "./types";
 
 const chat: ChatRequest = {
@@ -201,5 +201,111 @@ describe("connection test failures", () => {
     expect(result.message).toBe("Could not reach 127.0.0.1:9");
     expect(result.message).not.toContain("oops");
     expect(result.message).not.toContain("/api/tags");
+  });
+});
+
+describe("a text-only model sent an image", () => {
+  const config: ProviderConfig = {
+    id: "ollama",
+    kind: "ollama",
+    name: "Ollama",
+    baseUrl: "http://127.0.0.1:11434",
+    enabled: true,
+  };
+
+  const withImage: ChatRequest = {
+    ...chat,
+    model: "llama3.2:latest",
+    images: [{ mimeType: "image/jpeg", bytes: Buffer.from("page") }],
+  };
+
+  it("names the model and points at Settings instead of reporting HTTP 400", async () => {
+    // What Ollama actually answers a text-only model with. The body says why,
+    // but the body is the one thing the HTTP layer will not read -- providers
+    // echo the prompt inside their errors -- so the reason has to be inferred
+    // from the fact that we attached an image at all.
+    const fetchImpl = vi.fn(async () =>
+      jsonResponse(
+        { error: "Multimodal data provided, but model does not support multimodal requests." },
+        400,
+      ),
+    );
+
+    await expect(
+      providerChat(config, withImage, fetchImpl as unknown as typeof fetch),
+    ).rejects.toThrow(/llama3\.2:latest cannot read images.*Settings/s);
+  });
+
+  it("never quotes the provider's error body", async () => {
+    const fetchImpl = vi.fn(async () => jsonResponse({ error: "secret dream text" }, 400));
+
+    const error = await providerChat(
+      config,
+      withImage,
+      fetchImpl as unknown as typeof fetch,
+    ).then(
+      () => null,
+      (thrown: unknown) => thrown,
+    );
+
+    expect(error).toBeInstanceOf(ProviderError);
+    expect((error as Error).message).not.toContain("secret dream text");
+  });
+
+  it("leaves a 400 on a text-only request alone", async () => {
+    // A 400 with no image attached means something else entirely; rewriting it
+    // as a vision problem would send the operator to the wrong screen.
+    const fetchImpl = vi.fn(async () => jsonResponse({ error: "bad request" }, 400));
+
+    await expect(
+      providerChat(config, chat, fetchImpl as unknown as typeof fetch),
+    ).rejects.toThrow(ProviderError);
+    await expect(
+      providerChat(config, chat, fetchImpl as unknown as typeof fetch),
+    ).rejects.toThrow("The provider returned HTTP 400");
+  });
+
+  it("leaves a connection failure alone even when an image was attached", async () => {
+    // The photograph is not why the host is down.
+    const fetchImpl = vi.fn(async () => {
+      throw new TypeError("fetch failed");
+    });
+
+    await expect(
+      providerChat(config, withImage, fetchImpl as unknown as typeof fetch),
+    ).rejects.toThrow("Could not reach 127.0.0.1:11434");
+  });
+});
+
+describe("a model slower than its budget", () => {
+  const config: ProviderConfig = {
+    id: "ollama",
+    kind: "ollama",
+    name: "Ollama",
+    baseUrl: "http://127.0.0.1:11434",
+    enabled: true,
+  };
+
+  it("says the host did not finish, and names the budget", async () => {
+    // The socket was accepted; the model was just slow. Reporting this as
+    // "Timed out waiting for 127.0.0.1:11434" sends the operator to check the
+    // connection rather than the model they assigned.
+    const fetchImpl = vi.fn(async () => {
+      throw Object.assign(new Error("aborted"), { name: "TimeoutError" });
+    });
+
+    const error = await ollamaChat(
+      config,
+      chat,
+      fetchImpl as unknown as typeof fetch,
+      180_000,
+    ).then(
+      () => null,
+      (thrown: unknown) => thrown,
+    );
+
+    expect((error as Error).message).toBe(
+      "127.0.0.1:11434 did not finish answering after 180s",
+    );
   });
 });

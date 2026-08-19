@@ -6,6 +6,7 @@
  * environment or the database.
  */
 import { anthropicChat, anthropicEmbed, anthropicTest } from "./anthropic";
+import { explainImageRejection } from "./errors";
 import { ollamaChat, ollamaEmbed, ollamaTest } from "./ollama";
 import { openaiChat, openaiEmbed, openaiTest } from "./openai";
 import type {
@@ -23,9 +24,14 @@ export async function providerChat(
   fetchImpl: typeof fetch = fetch,
   timeoutMs?: number,
 ): Promise<ChatResponse> {
-  if (config.kind === "ollama") return ollamaChat(config, request, fetchImpl, timeoutMs);
-  if (config.kind === "openai") return openaiChat(config, request, fetchImpl, timeoutMs);
-  return anthropicChat(config, request, fetchImpl, timeoutMs);
+  try {
+    if (config.kind === "ollama") return await ollamaChat(config, request, fetchImpl, timeoutMs);
+    if (config.kind === "openai") return await openaiChat(config, request, fetchImpl, timeoutMs);
+    return await anthropicChat(config, request, fetchImpl, timeoutMs);
+  } catch (error) {
+    // `await` above rather than a bare return, so the rejection lands here.
+    throw explainImageRejection(request.model, Boolean(request.images?.length), error);
+  }
 }
 
 export async function providerEmbed(

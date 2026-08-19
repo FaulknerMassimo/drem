@@ -12,7 +12,7 @@ import {
 } from "@/lib/capture/actions";
 import type { ReviewFormState } from "@/lib/capture/form-state";
 import type { Destination } from "@/lib/ai/types";
-import type { ReviewAttachment } from "@/lib/capture/types";
+import type { CaptureProgress, ReviewAttachment } from "@/lib/capture/types";
 import type { SplitPart } from "@/lib/capture/types";
 import { LUCIDITY_LABELS } from "@/lib/journal/labels";
 import { CSRF_FIELD } from "@/lib/security/constants";
@@ -23,12 +23,14 @@ export function ReviewForm({
   defaultDate,
   csrfToken,
   splitDestination,
+  progress = null,
 }: {
   attachment: ReviewAttachment;
   extras: ReviewAttachment[];
   defaultDate: string;
   csrfToken: string;
   splitDestination: Destination;
+  progress?: CaptureProgress | null;
 }) {
   const [saveState, saveAction] = useActionState<ReviewFormState, FormData>(
     confirmReviewAction,
@@ -47,6 +49,16 @@ export function ReviewForm({
   const proposal = splitState.splitProposal;
   const processing = attachment.status === "pending" || attachment.status === "running";
   const failed = attachment.status === "failed";
+  /*
+   * Null unless a previous attempt actually failed. `unclaimJob` also parks a
+   * reason on the job when the session is locked, but it winds `attempts` back
+   * to zero on the way out, so that case reads as "not yet started" rather
+   * than as a failure the operator has to act on.
+   */
+  const retrying =
+    processing && progress && progress.attempts > 0 && progress.lastError
+      ? { ...progress, lastError: progress.lastError }
+      : null;
 
   return (
     <div className="space-y-6">
@@ -54,17 +66,33 @@ export function ReviewForm({
         <MediaPane attachment={attachment} />
         <div className="space-y-4">
           {processing && (
-            <p className="text-sm text-ink-400">
-              {attachment.kind === "audio"
-                ? "Transcribing…"
-                : "Reading the page…"}{" "}
-              You can wait, or type over it.
-            </p>
+            <div className="space-y-1">
+              <p className="text-sm text-ink-400">
+                {attachment.kind === "audio"
+                  ? "Transcribing…"
+                  : "Reading the page…"}{" "}
+                You can wait, or type over it.
+              </p>
+              {/*
+                A retry is invisible from the attachment row alone: it stays at
+                `running` through the whole backoff, so an unreachable model
+                looks identical to a slow one for a quarter of an hour. Saying
+                which attempt this is, and why the last one failed, is the
+                difference between waiting and knowing to go fix Settings.
+              */}
+              {retrying && (
+                <p role="status" className="text-sm text-warn-500">
+                  Attempt {retrying.attempts} of {retrying.maxAttempts} failed:{" "}
+                  {sentence(retrying.lastError)} Retrying.
+                </p>
+              )}
+            </div>
           )}
           {failed && (
             <p role="alert" className="text-sm text-warn-500">
-              Automatic reading failed. The file is still here — type what you
-              see or hear, then save.
+              Automatic reading failed
+              {progress?.lastError ? `: ${sentence(progress.lastError)}` : "."} The file is
+              still here — type what you see or hear, then save.
             </p>
           )}
           {attachment.status === "skipped" && attachment.kind === "image" && (
@@ -102,6 +130,15 @@ export function ReviewForm({
       </div>
     </div>
   );
+}
+
+/**
+ * Provider messages are written as fragments ("Could not reach x:11434") and
+ * as full sentences alike, and both get spliced into surrounding prose here.
+ */
+function sentence(text: string): string {
+  const trimmed = text.trim();
+  return /[.!?]$/.test(trimmed) ? trimmed : `${trimmed}.`;
 }
 
 function MediaPane({ attachment }: { attachment: ReviewAttachment }) {

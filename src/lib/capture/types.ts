@@ -49,3 +49,16 @@ export interface ReviewAttachment {
   status: AttachmentStatus;
   fields: ExtractedFields;
 }
+
+/**
+ * How the capture job behind an attachment is faring.
+ *
+ * Separate from `ReviewAttachment` because it comes from the queue, not the
+ * attachment row, and the attachment row cannot tell the difference between a
+ * first attempt and a third one waiting out a backoff.
+ */
+export interface CaptureProgress {
+  attempts: number;
+  maxAttempts: number;
+  lastError: string | null;
+}
