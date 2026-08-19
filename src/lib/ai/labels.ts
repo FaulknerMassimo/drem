@@ -4,7 +4,17 @@
  * Duplicated from the schema enums on purpose, the same way `journal/labels.ts`
  * is, so client components do not pull Drizzle into the browser bundle.
  */
-import { CAPTURE_ROLES, INSIGHT_ROLES, PROVIDER_KINDS, type CaptureRole, type InsightRole, type ModelRole, type ProviderKind } from "./types";
+import {
+  CAPTURE_ROLES,
+  INSIGHT_ROLES,
+  PROVIDER_KINDS,
+  SEMANTIC_ROLES,
+  type CaptureRole,
+  type InsightRole,
+  type ModelRole,
+  type ProviderKind,
+  type SemanticRole,
+} from "./types";
 
 export const INSIGHT_KIND_LABELS: Record<InsightRole, string> = {
   extraction: "Extraction",
@@ -32,14 +42,28 @@ export const CAPTURE_ROLE_HINTS: Record<CaptureRole, string> = {
   split: "Carves a log that contains several dreams into separate entries. Text only — any model will do.",
 };
 
+export const SEMANTIC_ROLE_LABELS: Record<SemanticRole, string> = {
+  embedding: "Embedding",
+  signs: "Dream-sign scan",
+};
+
+export const SEMANTIC_ROLE_HINTS: Record<SemanticRole, string> = {
+  embedding:
+    "Turns entries into vectors so search can work by meaning. Assign an embedding model (embeddinggemma, nomic-embed-text, text-embedding-3-small, …), not a chat one.",
+  signs:
+    "Reads across the archive for cues that keep recurring. Text only — the same model you use for reports will do.",
+};
+
 export const MODEL_ROLE_LABELS: Record<ModelRole, string> = {
   ...INSIGHT_KIND_LABELS,
   ...CAPTURE_ROLE_LABELS,
+  ...SEMANTIC_ROLE_LABELS,
 };
 
 export const MODEL_ROLE_HINTS: Record<ModelRole, string> = {
   ...INSIGHT_KIND_HINTS,
   ...CAPTURE_ROLE_HINTS,
+  ...SEMANTIC_ROLE_HINTS,
 };
 
 export const PROVIDER_KIND_LABELS: Record<ProviderKind, string> = {
@@ -57,7 +81,9 @@ export const PROVIDER_KIND_HINTS: Record<ProviderKind, string> = {
 /** Compile-time: these lists are the ones `types.ts` and the UI both use. */
 const roles: readonly InsightRole[] = INSIGHT_ROLES;
 const capture: readonly CaptureRole[] = CAPTURE_ROLES;
+const semantic: readonly SemanticRole[] = SEMANTIC_ROLES;
 const kinds: readonly ProviderKind[] = PROVIDER_KINDS;
 void roles;
 void capture;
+void semantic;
 void kinds;

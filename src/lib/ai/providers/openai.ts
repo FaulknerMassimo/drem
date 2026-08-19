@@ -6,9 +6,24 @@
  * stays on the machine, anything else is a remote call, and the destination
  * badge uses that rather than the kind name.
  */
-import type { ChatMessage, ChatRequest, ChatResponse, ConnectionTest, ProviderConfig } from "../types";
+import type {
+  ChatMessage,
+  ChatRequest,
+  ChatResponse,
+  ConnectionTest,
+  EmbedRequest,
+  EmbedResponse,
+  ProviderConfig,
+} from "../types";
 import { ProviderError } from "./errors";
-import { CHAT_TIMEOUT_MS, joinUrl, requestJson, TEST_TIMEOUT_MS } from "./http";
+import { readVector } from "./vectors";
+import {
+  CHAT_TIMEOUT_MS,
+  EMBED_TIMEOUT_MS,
+  joinUrl,
+  requestJson,
+  TEST_TIMEOUT_MS,
+} from "./http";
 
 export async function openaiChat(
   config: ProviderConfig,
@@ -69,6 +84,57 @@ export async function openaiTest(
         ? "Reached the endpoint, but it listed no models."
         : `Reached the endpoint. ${count} model${count === 1 ? "" : "s"} listed.`,
     models,
+  };
+}
+
+/**
+ * `/v1/embeddings`, which every OpenAI-compatible server implements — LM Studio
+ * and vLLM included, so a local embedding model can sit behind this adapter
+ * just as well as OpenAI's own.
+ *
+ * The reply is ordered by an explicit `index` rather than array position, and
+ * is re-sorted on that: a provider that returns them out of order would
+ * otherwise weld each dream's meaning to the next dream's row.
+ */
+export async function openaiEmbed(
+  config: ProviderConfig,
+  request: EmbedRequest,
+  fetchImpl: typeof fetch = fetch,
+  timeoutMs = EMBED_TIMEOUT_MS,
+): Promise<EmbedResponse> {
+  const payload = await requestJson(
+    joinUrl(config.baseUrl, "/embeddings"),
+    {
+      method: "POST",
+      headers: openaiHeaders(config),
+      body: JSON.stringify({ model: request.model, input: request.inputs }),
+    },
+    fetchImpl,
+    timeoutMs,
+  );
+
+  const record = asRecord(payload);
+  const data = Array.isArray(record.data) ? record.data : [];
+  if (data.length !== request.inputs.length) {
+    throw new ProviderError(
+      `The provider returned ${data.length} embeddings for ${request.inputs.length} inputs`,
+    );
+  }
+
+  const vectors = new Array<number[] | undefined>(data.length);
+  for (let position = 0; position < data.length; position++) {
+    const entry = asRecord(data[position]);
+    const index = typeof entry.index === "number" ? entry.index : position;
+    if (index < 0 || index >= vectors.length || vectors[index]) {
+      throw new ProviderError("The provider returned embeddings out of order");
+    }
+    vectors[index] = readVector(entry.embedding);
+  }
+
+  const usage = asRecord(record.usage);
+  return {
+    vectors: vectors as number[][],
+    inputTokens: numberOrUndefined(usage.prompt_tokens),
   };
 }
 

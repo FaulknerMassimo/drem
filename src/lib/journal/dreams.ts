@@ -419,6 +419,34 @@ export async function countDrafts(userId: string): Promise<number> {
   return Number(row?.total ?? 0);
 }
 
+/**
+ * Summaries for a set of ids, in the order the ids were given.
+ *
+ * Semantic search ranks ids first and only then needs rows, and the ranking
+ * order is the whole result — so this deliberately does not re-sort by date the
+ * way every other listing does.
+ */
+export async function dreamSummaries(
+  userId: string,
+  keys: UserKeys,
+  dreamIds: readonly string[],
+): Promise<DreamSummary[]> {
+  if (dreamIds.length === 0) return [];
+
+  const rows = await db
+    .select()
+    .from(dreams)
+    .where(and(eq(dreams.userId, userId), inArray(dreams.id, [...dreamIds])));
+
+  const tagsByDream = await tagsForDreams(userId, keys, rows.map((row) => row.id));
+  const byId = new Map(
+    rows.map((row) => [row.id, summarise(decodeDream(keys, row, tagsByDream.get(row.id) ?? []))]),
+  );
+  return dreamIds
+    .map((id) => byId.get(id))
+    .filter((summary): summary is DreamSummary => summary !== undefined);
+}
+
 export async function recentDreams(
   userId: string,
   keys: UserKeys,

@@ -5,7 +5,7 @@ tracking with a GitHub-style activity heatmap, AI dream-sign detection across th
 whole archive, handwritten-page OCR, and semantic search — with the journal
 encrypted at rest throughout.
 
-Status: **Phase 4 — Capture.** See [Roadmap](#roadmap).
+Status: **Phase 5 — Semantic layer.** See [Roadmap](#roadmap).
 
 ## Security model
 
@@ -64,6 +64,7 @@ Deliberately **not** encrypted, with the reasoning:
 | `wordCount` | Length statistics without decrypting the archive | How much you wrote |
 | Tag and dream-sign fingerprints | Grouping and filtering must run in SQL | That two entries share a tag, not which |
 | Embedding vectors *(only if `SEARCH_BACKEND=pgvector`)* | ANN indexing | Vectors are partially invertible. The default `encrypted` backend avoids this |
+| Which entries share a dream sign | Counting a sign and correlating it with lucidity must run in SQL | That two entries share a cue, not which cue |
 
 ### Other hardening
 
@@ -105,6 +106,26 @@ offered immediately; the recovery codes are shown **once**.
 Ollama deliberately stays on the host rather than in a container, so it keeps
 GPU access. Containers reach it at `host.docker.internal:11434`.
 
+### Search and dream signs
+
+Assign a model to the **Embedding** role in Settings before searching —
+`embeddinggemma` in Ollama is the default the schema is dimensioned for. The
+journal is encrypted, so nothing can search it for a word; search compares each
+entry as a vector instead, and the comparison runs in the app process rather
+than in Postgres.
+
+New entries are indexed **as you write them, only while the embedding model is
+on this machine**. A remote embedding model is never used as a side effect of
+saving — indexing it would send every dream you write to a third party without
+asking — so with one assigned you index from the search page, where the
+destination and the acknowledgement are. The same page reports how much of the
+archive is indexed, since a search that silently misses half your entries still
+returns results.
+
+Entries written before you assigned a model (and anything imported) need one
+backfill pass from that page. Changing the embedding model re-indexes from
+scratch: vectors from two models are not comparable.
+
 ### Development
 
 ```bash
@@ -130,7 +151,8 @@ dream content, the password, or `MASTER_KEY` appears anywhere in it.
 - [x] **2** — Nights and dreams, editor, activity heatmap, streaks, 3am capture mode
 - [x] **3** — AI provider layer (Ollama / OpenAI-compatible / Anthropic), insights pipeline
 - [x] **4** — Photo OCR with review, bulk import, voice memos, AI split of multi-dream logs
-- [ ] **5** — Embeddings, semantic search, dream-sign detection
+- [x] **5** — Embeddings with backfill, semantic search, "dreams like this", dream-sign
+      detection with lucidity correlation
 - [ ] **6** — Statistics, period reports, PWA offline capture, export/import
 
 ## Backups

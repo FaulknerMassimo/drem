@@ -6,6 +6,7 @@ import { redirect } from "next/navigation";
 import { recordAuthEvent, clientContext } from "@/lib/auth/audit";
 import { currentSession, type ActiveSession } from "@/lib/auth/session";
 import { env } from "@/lib/env";
+import { queueLocalEmbeddings } from "@/lib/semantic/queue";
 import { assertCsrf } from "@/lib/security/csrf-server";
 import { daysBetween, isIsoDate, nightDateFor, type IsoDate } from "./dates";
 import {
@@ -67,19 +68,22 @@ export async function saveDreamAction(
   if (!parsed.success) return { error: firstIssue(parsed.error) };
 
   const dreamId = String(formData.get("id") ?? "");
-  let destination: string;
+  let saved: string;
 
   if (dreamId) {
     const updated = await updateDream(session.userId, session.keys, dreamId, parsed.data);
     if (!updated) return { error: "That entry no longer exists." };
-    destination = `/dream/${dreamId}`;
+    saved = dreamId;
   } else {
-    const created = await createDream(session.userId, session.keys, parsed.data);
-    destination = `/dream/${created}`;
+    saved = await createDream(session.userId, session.keys, parsed.data);
   }
 
+  // The entry changed, so its vector is stale. Only queued when the embedding
+  // model is on this machine; a remote one is asked for on the search page.
+  await queueLocalEmbeddings(session.userId, session.keys, [saved]);
+
   refreshJournal();
-  redirect(destination);
+  redirect(`/dream/${saved}`);
 }
 
 export async function deleteDreamAction(formData: FormData): Promise<void> {
@@ -179,12 +183,15 @@ export async function captureAction(
   });
   if (!parsed.success) return { error: firstIssue(parsed.error) };
 
-  await captureDream(
+  const captured = await captureDream(
     session.userId,
     session.keys,
     parsed.data.nightDate,
     parsed.data.body,
   );
+  // After the write, never before it: at 4am the only thing that matters is
+  // that the text is already durable, and indexing is a queue insert either way.
+  await queueLocalEmbeddings(session.userId, session.keys, [captured]);
 
   refreshJournal();
   return { saved: true, savedAt: Date.now() };

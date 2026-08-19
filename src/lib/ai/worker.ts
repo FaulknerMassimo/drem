@@ -49,6 +49,11 @@ import {
   runTranscribeJob,
 } from "@/lib/capture/process";
 import { markAttachmentStatus } from "@/lib/capture/attachments";
+import {
+  runEmbedJob,
+  runSignScanJob,
+  SemanticSkipError,
+} from "@/lib/semantic/process";
 
 type DrainResult = "done" | "empty" | "locked";
 
@@ -66,11 +71,24 @@ export function kickWorker(): void {
     });
 }
 
+/**
+ * How long one drain may keep working.
+ *
+ * An embedding backfill queues one job per entry, so the old fixed budget of
+ * twenty would have needed twenty page loads to index a year. A wall-clock
+ * budget instead: it drains a whole archive in one pass against a local model,
+ * and still hands the process back promptly when the model is slow or remote.
+ */
+const DRAIN_BUDGET_MS = 120_000;
+const DRAIN_MAX_JOBS = 2_000;
+
 async function drain(): Promise<void> {
   await reclaimStuckJobs();
-  for (let i = 0; i < 20; i++) {
+  const deadline = Date.now() + DRAIN_BUDGET_MS;
+  for (let i = 0; i < DRAIN_MAX_JOBS; i++) {
     const result = await processNextJob();
     if (result !== "done") break;
+    if (Date.now() >= deadline) break;
   }
 }
 
@@ -132,6 +150,28 @@ async function runJob(job: JobRecord, keys: UserKeys): Promise<void> {
       await runTranscribeJob(job.userId, keys, attachmentId);
     } catch (error) {
       if (error instanceof CaptureSkipError) throw new SkipError(error.message);
+      throw error;
+    }
+    return;
+  }
+
+  if (job.kind === "embed_dream") {
+    const { dreamId } = parseDreamPayload(job.payload);
+    try {
+      await runEmbedJob(job.userId, keys, dreamId);
+    } catch (error) {
+      if (error instanceof SemanticSkipError) throw new SkipError(error.message);
+      throw error;
+    }
+    return;
+  }
+
+  if (job.kind === "detect_dream_signs") {
+    const payload = parseReportPayload(job.payload);
+    try {
+      await runSignScanJob(job.userId, keys, payload.periodStart, payload.periodEnd);
+    } catch (error) {
+      if (error instanceof SemanticSkipError) throw new SkipError(error.message);
       throw error;
     }
     return;

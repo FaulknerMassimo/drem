@@ -10,6 +10,18 @@ import { CHAT_TIMEOUT_MS, joinUrl, requestJson, TEST_TIMEOUT_MS } from "./http";
 
 const ANTHROPIC_VERSION = "2023-06-01";
 
+/**
+ * Anthropic has no embeddings endpoint — it recommends a third party for that.
+ *
+ * Failing loudly here is the point: silently falling back to some other
+ * provider would send the journal somewhere the user never assigned.
+ */
+export async function anthropicEmbed(): Promise<never> {
+  throw new ProviderError(
+    "Anthropic does not offer an embeddings API. Assign Ollama or an OpenAI-compatible endpoint to the embedding role.",
+  );
+}
+
 export async function anthropicChat(
   config: ProviderConfig,
   request: ChatRequest,

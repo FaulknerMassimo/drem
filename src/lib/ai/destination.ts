@@ -82,5 +82,7 @@ export function destinationsFor(config: AiConfig): Record<ModelRole, Destination
     report: destinationFor(config, "report"),
     ocr: destinationFor(config, "ocr"),
     split: destinationFor(config, "split"),
+    embedding: destinationFor(config, "embedding"),
+    signs: destinationFor(config, "signs"),
   };
 }

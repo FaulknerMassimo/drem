@@ -47,6 +47,9 @@ export default async function AppLayout({
               <Link href="/journal" className="hover:text-ink-200">
                 Journal
               </Link>
+              <Link href="/search" className="hover:text-ink-200">
+                Search
+              </Link>
               <Link href="/drafts" className="hover:text-ink-200">
                 Drafts
                 {drafts > 0 && (
@@ -65,6 +68,9 @@ export default async function AppLayout({
                     {inbox}
                   </span>
                 )}
+              </Link>
+              <Link href="/signs" className="hover:text-ink-200">
+                Signs
               </Link>
               <Link href="/reports" className="hover:text-ink-200">
                 Reports

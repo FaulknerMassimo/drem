@@ -13,6 +13,7 @@ import { eq, sql } from "drizzle-orm";
 import { db } from "@/db";
 import { insights, jobs, nights, settings, users } from "@/db/schema";
 import { saveAiConfig } from "@/lib/ai/config";
+import { emptyRoles } from "@/lib/ai/schema";
 import { insightsForDream, latestInsightForDream, saveInsight } from "@/lib/ai/insights";
 import { enqueueDreamInsight, parseDreamPayload } from "@/lib/ai/jobs";
 import { processNextJob } from "@/lib/ai/worker";
@@ -66,12 +67,9 @@ async function assignLocalModel() {
       },
     ],
     roles: {
+      ...emptyRoles(),
       extraction: { providerId: "ollama", model: "llama3.2" },
       lucidity: { providerId: "ollama", model: "llama3.2" },
-      symbolic: null,
-      report: null,
-      ocr: null,
-      split: null,
     },
   });
 }
@@ -128,7 +126,7 @@ describe("encrypted config and insights", () => {
           enabled: true,
         },
       ],
-      roles: { extraction: null, lucidity: null, symbolic: null, report: null, ocr: null, split: null },
+      roles: emptyRoles(),
     });
 
     const [row] = await db.select().from(settings).where(eq(settings.userId, userId));

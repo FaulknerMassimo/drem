@@ -8,6 +8,7 @@ import "server-only";
 import type { UserKeys } from "@/lib/crypto/envelope";
 import { createDream, updateDream, type DreamSource } from "@/lib/journal/dreams";
 import { dreamInputSchema, type DreamInput } from "@/lib/journal/validation";
+import { queueLocalEmbeddings } from "@/lib/semantic/queue";
 import type { IsoDate } from "@/lib/journal/dates";
 import { attachToDream } from "./attachments";
 import type { SplitPart } from "./fields";
@@ -69,6 +70,9 @@ export async function confirmAsDreams(
   if (ids[0] && options.attachmentIds.length > 0) {
     await attachToDream(userId, ids[0], options.attachmentIds);
   }
+  // Confirmed entries are real entries; they belong in the search index like
+  // any other. Local embedding models only — see queueLocalEmbeddings.
+  await queueLocalEmbeddings(userId, keys, ids);
   return ids;
 }
 

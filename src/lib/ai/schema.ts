@@ -49,6 +49,8 @@ export const aiConfigSchema = z.object({
     // Optional so a config blob written before these roles existed still loads.
     ocr: assignmentSchema.optional(),
     split: assignmentSchema.optional(),
+    embedding: assignmentSchema.optional(),
+    signs: assignmentSchema.optional(),
   }),
 });
 
@@ -60,6 +62,8 @@ export function emptyRoles(): RoleMap {
     report: null,
     ocr: null,
     split: null,
+    embedding: null,
+    signs: null,
   };
 }
 
@@ -101,6 +105,8 @@ export function parseAiConfig(value: unknown): AiConfig {
       ...parsed.roles,
       ocr: parsed.roles.ocr ?? null,
       split: parsed.roles.split ?? null,
+      embedding: parsed.roles.embedding ?? null,
+      signs: parsed.roles.signs ?? null,
     },
   };
 }

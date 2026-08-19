@@ -8,7 +8,7 @@ import type { SettingsFormState, TestFormState } from "@/lib/ai/form-state";
 import { MODEL_ROLE_HINTS, MODEL_ROLE_LABELS, PROVIDER_KIND_HINTS, PROVIDER_KIND_LABELS } from "@/lib/ai/labels";
 import { defaultUrlFor, emptyRoles } from "@/lib/ai/schema";
 import { CSRF_FIELD } from "@/lib/security/constants";
-import { CAPTURE_ROLES, INSIGHT_ROLES, MODEL_ROLES } from "@/lib/ai/types";
+import { CAPTURE_ROLES, INSIGHT_ROLES, MODEL_ROLES, SEMANTIC_ROLES } from "@/lib/ai/types";
 import type {
   PublicAiConfig,
   PublicProvider,
@@ -144,6 +144,29 @@ export function SettingsForm({
             contains several dreams is text-only.
           </p>
           {CAPTURE_ROLES.map((role) => (
+            <RoleRow
+              key={role}
+              role={role}
+              assignment={roles[role]}
+              providers={providers.filter((provider) => provider.enabled)}
+              models={models}
+              onChange={(assignment) =>
+                setRoles((current) => ({ ...current, [role]: assignment }))
+              }
+            />
+          ))}
+        </div>
+
+        <div className="space-y-4">
+          <h2 className="text-lg font-medium">Semantic roles</h2>
+          <p className="text-sm text-ink-400">
+            The embedding model turns entries into vectors so search can work by
+            meaning; it must be an embedding model, not a chat one. Keep it local
+            and entries are indexed as you write them — a remote one is only used
+            when you ask for it on the search page, so writing an entry never
+            sends it anywhere on its own.
+          </p>
+          {SEMANTIC_ROLES.map((role) => (
             <RoleRow
               key={role}
               role={role}

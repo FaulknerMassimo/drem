@@ -11,6 +11,7 @@ import sharp from "sharp";
 import { db } from "@/db";
 import { attachments, dreams, jobs, nights, users } from "@/db/schema";
 import { saveAiConfig } from "@/lib/ai/config";
+import { emptyRoles } from "@/lib/ai/schema";
 import { enqueueAttachmentJob, parseAttachmentPayload } from "@/lib/ai/jobs";
 import { processNextJob } from "@/lib/ai/worker";
 import { createInitialAccount } from "@/lib/auth/accounts";
@@ -148,12 +149,8 @@ describe("the OCR worker", () => {
         },
       ],
       roles: {
-        extraction: null,
-        lucidity: null,
-        symbolic: null,
-        report: null,
+        ...emptyRoles(),
         ocr: { providerId: "ollama", model: "llama3.2-vision" },
-        split: null,
       },
     });
     putKeys("worker", userId, keys, 60_000);

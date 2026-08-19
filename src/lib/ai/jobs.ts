@@ -8,7 +8,7 @@
  */
 import "server-only";
 import { randomUUID } from "node:crypto";
-import { and, asc, eq, inArray, lte, sql } from "drizzle-orm";
+import { and, asc, count, eq, inArray, lte, sql } from "drizzle-orm";
 import { db } from "@/db";
 import { jobs } from "@/db/schema";
 import { isIsoDate, type IsoDate } from "@/lib/journal/dates";
@@ -22,7 +22,9 @@ export type InsightJobKind =
 
 export type CaptureJobKind = "ocr_attachment" | "transcribe_attachment";
 
-export type JobKind = InsightJobKind | CaptureJobKind;
+export type SemanticJobKind = "embed_dream" | "detect_dream_signs";
+
+export type JobKind = InsightJobKind | CaptureJobKind | SemanticJobKind;
 
 export interface DreamJobPayload {
   dreamId: string;
@@ -70,6 +72,8 @@ const ALL_JOB_KINDS: JobKind[] = [
   "period_report",
   "ocr_attachment",
   "transcribe_attachment",
+  "embed_dream",
+  "detect_dream_signs",
 ];
 
 const OPEN: Array<(typeof jobs.$inferSelect)["status"]> = ["pending", "running"];
@@ -141,7 +145,7 @@ export async function enqueueDreamInsight(
   role: DreamInsightKind,
 ): Promise<string> {
   const kind = DREAM_JOB[role];
-  const existing = await findOpenDreamJob(userId, dreamId, kind);
+  const existing = await findOpenJobForDream(userId, dreamId, kind);
   if (existing) return existing;
 
   const id = randomUUID();
@@ -192,10 +196,10 @@ export async function enqueueAttachmentJob(
   return id;
 }
 
-async function findOpenDreamJob(
+async function findOpenJobForDream(
   userId: string,
   dreamId: string,
-  kind: InsightJobKind,
+  kind: InsightJobKind | SemanticJobKind,
 ): Promise<string | null> {
   const rows = await db
     .select({ id: jobs.id, payload: jobs.payload })
@@ -238,6 +242,96 @@ export async function pendingDreamJobs(
     pending.push(roleForJob(row.kind) as DreamInsightKind);
   }
   return pending;
+}
+
+/**
+ * Enqueues an embedding for one dream, or returns the already-open job.
+ *
+ * A backfill enqueues one of these per entry, and an edit enqueues another for
+ * the entry it touched, so the de-dupe is what keeps a busy evening of editing
+ * from queueing the same dream a dozen times.
+ */
+export async function enqueueEmbedDream(userId: string, dreamId: string): Promise<string> {
+  const existing = await findOpenJobForDream(userId, dreamId, "embed_dream");
+  if (existing) return existing;
+
+  const id = randomUUID();
+  await db.insert(jobs).values({ id, userId, kind: "embed_dream", payload: { dreamId } });
+  return id;
+}
+
+/**
+ * Enqueues embeddings for many dreams at once.
+ *
+ * One query for what is already queued rather than one per dream: a backfill
+ * over a year's journal is several hundred entries, and the per-dream check
+ * would be several hundred round-trips before a single vector is computed.
+ */
+export async function enqueueEmbedDreams(
+  userId: string,
+  dreamIds: readonly string[],
+): Promise<number> {
+  if (dreamIds.length === 0) return 0;
+
+  const open = await db
+    .select({ payload: jobs.payload })
+    .from(jobs)
+    .where(
+      and(eq(jobs.userId, userId), eq(jobs.kind, "embed_dream"), inArray(jobs.status, OPEN)),
+    );
+  const queued = new Set(
+    open.map((row) => asDreamPayload(row.payload)?.dreamId).filter(Boolean) as string[],
+  );
+
+  const rows = [...new Set(dreamIds)]
+    .filter((dreamId) => !queued.has(dreamId))
+    .map((dreamId) => ({
+      id: randomUUID(),
+      userId,
+      kind: "embed_dream" as const,
+      payload: { dreamId },
+    }));
+
+  if (rows.length === 0) return 0;
+  await db.insert(jobs).values(rows);
+  return rows.length;
+}
+
+/** One scan at a time: two concurrent scans would race on the same sign rows. */
+export async function enqueueSignScan(
+  userId: string,
+  periodStart: IsoDate,
+  periodEnd: IsoDate,
+): Promise<string> {
+  const [existing] = await db
+    .select({ id: jobs.id })
+    .from(jobs)
+    .where(
+      and(
+        eq(jobs.userId, userId),
+        eq(jobs.kind, "detect_dream_signs"),
+        inArray(jobs.status, OPEN),
+      ),
+    )
+    .limit(1);
+  if (existing) return existing.id;
+
+  const id = randomUUID();
+  await db.insert(jobs).values({
+    id,
+    userId,
+    kind: "detect_dream_signs",
+    payload: { periodStart, periodEnd },
+  });
+  return id;
+}
+
+export async function openJobCount(userId: string, kind: JobKind): Promise<number> {
+  const [row] = await db
+    .select({ total: count() })
+    .from(jobs)
+    .where(and(eq(jobs.userId, userId), eq(jobs.kind, kind), inArray(jobs.status, OPEN)));
+  return Number(row?.total ?? 0);
 }
 
 export async function pendingReportCount(userId: string): Promise<number> {

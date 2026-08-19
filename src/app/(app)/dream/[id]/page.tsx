@@ -1,15 +1,19 @@
 import { notFound } from "next/navigation";
 import { AttachmentGallery } from "@/components/attachment-gallery";
 import { InsightPanel } from "@/components/insight-panel";
+import { SimilarDreams } from "@/components/similar-dreams";
 import { SplitForm } from "@/components/split-form";
 import { sessionOrRedirect } from "@/lib/auth/session";
-import { loadDestinations } from "@/lib/ai/config";
+import { loadAiConfig } from "@/lib/ai/config";
+import { destinationsFor } from "@/lib/ai/destination";
 import { insightsForDream } from "@/lib/ai/insights";
 import { pendingDreamJobs } from "@/lib/ai/jobs";
 import { listAttachmentsForDream } from "@/lib/capture/attachments";
 import { describeDate } from "@/lib/journal/dates";
 import { getDream } from "@/lib/journal/dreams";
 import { readCsrfToken } from "@/lib/security/csrf-server";
+import { similarDreams } from "@/lib/semantic/search";
+import { signsForDreams } from "@/lib/semantic/signs";
 import {
   LUCIDITY_LABELS,
   RATING_LABELS,
@@ -39,13 +43,19 @@ export default async function DreamPage({
   const dream = await getDream(session.userId, session.keys, id);
   if (!dream) notFound();
 
-  const [insights, pending, destinations, attached, csrfToken] = await Promise.all([
+  // Loaded once and shared: `similarDreams` needs the role assignment to know
+  // which index to look in, and the badges need the destinations.
+  const config = await loadAiConfig(session.userId, session.keys);
+  const [insights, pending, attached, similar, signs, csrfToken] = await Promise.all([
     insightsForDream(session.userId, session.keys, dream.id),
     pendingDreamJobs(session.userId, dream.id),
-    loadDestinations(session.userId, session.keys),
     listAttachmentsForDream(session.userId, session.keys, dream.id),
+    similarDreams(session.userId, session.keys, config, dream.id),
+    signsForDreams(session.userId, session.keys, [dream.id]),
     readCsrfToken(),
   ]);
+  const destinations = destinationsFor(config);
+  const dreamSigns = signs.get(dream.id) ?? [];
 
   return (
     <article className="space-y-6">
@@ -112,6 +122,23 @@ export default async function DreamPage({
         </div>
       )}
 
+      {dreamSigns.length > 0 && (
+        <div className="space-y-2">
+          <h2 className="text-xs text-ink-400">Dream signs in this entry</h2>
+          <div className="flex flex-wrap gap-2">
+            {dreamSigns.map((sign) => (
+              <a
+                key={sign.id}
+                href={`/signs/${sign.id}`}
+                className="rounded-md border border-lucid-500/40 px-2 py-0.5 text-xs text-lucid-300 hover:border-lucid-400"
+              >
+                {sign.label}
+              </a>
+            ))}
+          </div>
+        </div>
+      )}
+
       <dl className="card grid grid-cols-2 gap-4 sm:grid-cols-3">
         <Detail label="Vividness" value={dream.vividness ? RATING_LABELS[dream.vividness]! : null} />
         <Detail label="Control" value={dream.control ? RATING_LABELS[dream.control]! : null} />
@@ -147,6 +174,8 @@ export default async function DreamPage({
       </div>
 
       <AttachmentGallery attachments={attached} />
+
+      <SimilarDreams hits={similar} />
 
       {dream.body?.trim() && (
         <SplitForm

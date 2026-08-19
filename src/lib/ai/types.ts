@@ -27,8 +27,24 @@ export type DreamInsightKind = Exclude<InsightRole, "report">;
 export const CAPTURE_ROLES = ["ocr", "split"] as const;
 export type CaptureRole = (typeof CAPTURE_ROLES)[number];
 
-export const MODEL_ROLES = [...INSIGHT_ROLES, ...CAPTURE_ROLES] as const;
+/**
+ * The semantic layer's two roles. `embedding` is not a chat model — it calls a
+ * different endpoint and returns vectors — but it lives in the same assignment
+ * map because it is still a destination a dream gets sent to, and the badge
+ * that says so must work for it exactly as it does for the rest.
+ */
+export const SEMANTIC_ROLES = ["embedding", "signs"] as const;
+export type SemanticRole = (typeof SEMANTIC_ROLES)[number];
+
+export const MODEL_ROLES = [
+  ...INSIGHT_ROLES,
+  ...CAPTURE_ROLES,
+  ...SEMANTIC_ROLES,
+] as const;
 export type ModelRole = (typeof MODEL_ROLES)[number];
+
+/** Every role but `embedding`, which has no prompt and no completion. */
+export type ChatRole = Exclude<ModelRole, "embedding">;
 
 export interface ProviderConfig {
   id: string;
@@ -93,6 +109,23 @@ export interface ChatResponse {
   text: string;
   inputTokens?: number;
   outputTokens?: number;
+}
+
+/**
+ * A batch of texts to embed.
+ *
+ * Batched because a backfill embeds hundreds of entries, and one request per
+ * dream turns a local index build into minutes of round-trips.
+ */
+export interface EmbedRequest {
+  model: string;
+  inputs: string[];
+}
+
+export interface EmbedResponse {
+  /** One vector per input, in the order they were given. */
+  vectors: number[][];
+  inputTokens?: number;
 }
 
 export interface ConnectionTest {

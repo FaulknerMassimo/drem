@@ -6,15 +6,17 @@
  * the *text* of a prompt requires bumping the version; changing it in place
  * would make existing rows lie about how they were produced.
  */
-import type { InsightRole, ModelRole } from "./types";
+import type { ChatRole, InsightRole } from "./types";
 
-export const PROMPT_VERSIONS: Record<ModelRole, string> = {
+/** Keyed by ChatRole: `embedding` has no prompt, only a model name. */
+export const PROMPT_VERSIONS: Record<ChatRole, string> = {
   extraction: "extraction.v1",
   lucidity: "lucidity.v1",
   symbolic: "symbolic.v1",
   report: "report.v1",
   ocr: "ocr.v1",
   split: "split.v1",
+  signs: "signs.v1",
 };
 
 export const MAX_INSIGHT_CHARS = 50_000;
@@ -169,5 +171,66 @@ export function splitMessages(body: string) {
     system:
       "You split a dream-journal log into individual dream episodes. Keep the writer's words. Do not interpret, summarise, or add detail. A new dream usually starts at a scene change, a waking, or an explicit marker like 'Dream 2'. If the log is one continuous dream, return a single item. Reply with a JSON object matching the schema and nothing else.",
     user: `Schema:\n${SPLIT_SCHEMA}\n\nLog:\n${clip(body)}`,
+  };
+}
+
+// ---------------------------------------------------------------------------
+// Dream signs
+// ---------------------------------------------------------------------------
+
+/** How many entries one scan may carry. Beyond this the window is narrowed. */
+export const MAX_SCAN_DREAMS = 60;
+
+/** Per-entry budget inside a scan. Sixty full entries would not fit a context. */
+export const MAX_SCAN_BODY_CHARS = 900;
+
+const SIGNS_SCHEMA = `{
+  "signs": [
+    {
+      "label": "two or three words, lower case",
+      "category": "person | place | object | action | emotion | anomaly | theme",
+      "entries": [1, 4, 9],
+      "confidence": 0.0
+    }
+  ]
+}`;
+
+export interface ScanEntry {
+  date: string;
+  isLucid: boolean;
+  /** The structured extraction if one exists, otherwise a clip of the entry. */
+  summary: string;
+}
+
+/**
+ * Finds the cues that repeat across an archive.
+ *
+ * The scan is deliberately given *numbered* entries and asked to return
+ * indices, not quotes: the occurrence table needs to know which dreams a sign
+ * appeared in, and asking for text back would mean matching prose against the
+ * archive to find out.
+ *
+ * `known` carries the labels already on file — signs added by hand and signs
+ * kept from earlier scans — so a recurring cue accumulates occurrences under
+ * one label instead of forking into three spellings of the same thing.
+ */
+export function dreamSignMessages(
+  entries: ScanEntry[],
+  known: string[],
+): { system: string; user: string } {
+  const blocks = entries.map((entry, index) => {
+    const lucid = entry.isLucid ? " [lucid]" : "";
+    return `${index + 1}. (${entry.date})${lucid} ${clip(entry.summary, MAX_SCAN_BODY_CHARS)}`;
+  });
+
+  const knownBlock =
+    known.length > 0
+      ? `\n\nLabels already on file — reuse one verbatim when the cue is the same, rather than inventing a near-duplicate:\n${known.join("\n")}`
+      : "";
+
+  return {
+    system:
+      "You find dream signs in a dream journal: the people, places, objects, actions, emotions, anomalies and themes that recur across entries and could be recognised from inside a dream. Only report a cue that appears in at least two entries. Prefer specific cues over generic ones — 'teeth falling out' is a dream sign, 'a person' is not. Anomalies, meaning impossible or inconsistent details, are the most useful category. Do not invent cues that are not in the entries. Reply with a JSON object matching the schema and nothing else.",
+    user: `Schema:\n${SIGNS_SCHEMA}\n\nEntry numbers in "entries" refer to the numbered list below.${knownBlock}\n\nEntries:\n${blocks.join("\n\n")}`,
   };
 }

@@ -11,6 +11,12 @@ export default defineConfig({
     exclude: ["src/**/*.integration.test.ts", "node_modules/**"],
   },
   resolve: {
-    alias: { "@": fileURLToPath(new URL("./src", import.meta.url)) },
+    alias: {
+      "@": fileURLToPath(new URL("./src", import.meta.url)),
+      // Modules that guard themselves with `server-only` throw outside a React
+      // Server Component graph. The unit suites exercise them directly in Node,
+      // so it is stubbed away here exactly as the integration config does.
+      "server-only": fileURLToPath(new URL("./test/server-only.ts", import.meta.url)),
+    },
   },
 });

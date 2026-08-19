@@ -32,7 +32,7 @@ becomes permanently unreadable. `scripts/generate-keys.ts` refuses to run when
 
 ```bash
 npm test                   # unit; no infrastructure needed
-npm run test:integration   # needs `npm run dev:up`
+npm run test:integration   # needs `npm run dev:up`; runs against drem_test, never the live journal
 npm run typecheck
 ```
 
@@ -48,6 +48,11 @@ worst bug this project can have, and it will not announce itself.
 write path rather than hand-built rows, and reads the bytes back out in SQL
 instead of shelling out to `pg_dump` — so it runs without Docker access. Add new
 encrypted fields to both.
+
+`semantic.integration.test.ts` adds the assertion for the one column that is
+readable only by opt-in: under the default `SEARCH_BACKEND=encrypted`,
+`embeddings.vector` must stay null. A vector is invertible enough to leak the
+gist of an entry, so it filling itself in makes the trade-off for the operator.
 
 `npm run seed -- --email ... --password ...` fills a development journal with
 months of plausible nights. Features about shape over time — the heatmap, the
@@ -86,6 +91,12 @@ streaks — look fine and prove nothing with four hand-typed entries.
    `src/lib/ai/`, are opt-in per role, and are surfaced in the UI before a dream
    leaves the machine.
 
+7. **Nothing is sent as a side effect of saving unless it stays local.**
+   Embeddings are queued automatically on write *only* when the embedding role
+   points at this machine — see `queueLocalEmbeddings()`. A remote model has to
+   be asked for from a screen that shows the badge and takes an acknowledgement.
+   Any future background work that touches a model inherits this rule.
+
 ## Layout
 
 ```
@@ -95,6 +106,8 @@ src/lib/auth/       accounts, session, key-store, pending, one-shot, actions
 src/lib/journal/    nights, dreams, tags, stats + pure: dates, heatmap, streaks
 src/lib/ai/         providers, encrypted config, prompts, insights, job worker
 src/lib/capture/    encrypted attachments, OCR, whisper, import parsers, split
+src/lib/semantic/   embeddings, meaning-based search, dream signs + pure:
+                    vectors, correlation, text, signs-parse
 src/db/schema.ts    all 15 tables, with the reasoning in comments
 src/app/(auth)/     setup, login, TOTP verify
 src/app/(app)/      everything behind a session
@@ -106,9 +119,12 @@ src/app/(capture)/  the 3am screen, deliberately outside the app chrome
 `nights`, `dreams`, `tags` and `stats` touch the database and are covered by
 `journal.integration.test.ts`. `src/lib/capture/` follows the same split:
 `fields`, `import-parse` and `image` are pure; attachments and the OCR worker
-are covered by `capture.integration.test.ts`. `labels.ts` is duplicated from the schema enums
+are covered by `capture.integration.test.ts`. `src/lib/semantic/` is the same
+again: `vectors`, `correlation`, `text` and `signs-parse` are pure and have unit
+suites; `embeddings`, `search`, `signs` and the job bodies in `process.ts` are
+covered by `semantic.integration.test.ts`. `labels.ts` is duplicated from the schema enums
 on purpose, so client components do not pull Drizzle into the browser bundle —
-`validation.ts` holds a compile-time guard against the two drifting.
+`validation.ts` and `signs-parse.ts` hold compile-time guards against the two drifting.
 
 Auth is hand-rolled rather than NextAuth because the session must hold an
 unwrapped data key in memory, which no off-the-shelf adapter models.
@@ -150,6 +166,21 @@ them.
 - **De-duplicate tag ids, not tag names.** Normalisation folds Unicode form,
   case and whitespace together, so two names that look different can share one
   fingerprint — attaching both to a dream collides on `dream_tags`' primary key.
+  Dream signs share the fingerprint scheme and the same trap.
+- **Vectors from two models must never be compared.** `embeddings.model` holds
+  `<model>@v<EMBEDDING_TEXT_VERSION>`, and every read filters on it. Changing
+  what `embeddingText()` composes without bumping that version silently mixes
+  two meanings of "this entry" in one index.
+- **A scan's entry indices are validated against the window that was sent.**
+  The reply numbers entries from 1; an index outside the window is dropped, not
+  clamped. Clamping files a real dream sign against an unrelated entry, and
+  nothing downstream can tell that it is wrong.
+- **`<li>` cannot nest.** `DreamRow` *is* the `<li>`; wrapping it in another one
+  to hang a similarity score off it is invalid HTML and a hydration error. Pass
+  `aside` instead, or use `ScoredDreamList`.
+- **Integration tests never share the live journal database.** They create and
+  truncate `drem_test`. Pointing them at `drem` (or dumping `drem` from
+  `pg_dump`) wipes the owner's account and the app falls back to `/setup`.
 
 ## Style
 

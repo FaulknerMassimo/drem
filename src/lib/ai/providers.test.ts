@@ -51,6 +51,37 @@ describe("Ollama adapter", () => {
     expect(result.inputTokens).toBe(10);
   });
 
+  it("names the real cause when a reasoning model runs out of budget", async () => {
+    // Thinking is charged to the same budget as the answer, so a large prompt
+    // can end with nothing in `content`. "Empty completion" would send the
+    // operator to look at the connection instead of at the budget.
+    const fetchImpl = vi.fn(async () =>
+      jsonResponse({
+        message: { content: "", thinking: "a long private chain of reasoning" },
+        done_reason: "length",
+      }),
+    );
+    await expect(
+      ollamaChat(config, chat, fetchImpl as unknown as typeof fetch),
+    ).rejects.toThrow(/whole token budget/);
+  });
+
+  it("does not quote the reasoning, which is derived from the dream", async () => {
+    const fetchImpl = vi.fn(async () =>
+      jsonResponse({
+        message: { content: "", thinking: "secret dream text, reconsidered" },
+        done_reason: "length",
+      }),
+    );
+    await expect(
+      ollamaChat(config, chat, fetchImpl as unknown as typeof fetch),
+    ).rejects.toThrow(
+      expect.objectContaining({
+        message: expect.not.stringContaining("secret dream text"),
+      }),
+    );
+  });
+
   it("asks for JSON when extraction needs it", async () => {
     const fetchImpl = vi.fn(async (_url: string | URL | Request, init?: RequestInit) => {
       const body = JSON.parse(String(init?.body));

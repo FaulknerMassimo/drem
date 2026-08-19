@@ -22,9 +22,16 @@ function Badge({
   );
 }
 
-export function DreamRow({ dream }: { dream: DreamSummary }) {
+export function DreamRow({
+  dream,
+  aside,
+}: {
+  dream: DreamSummary;
+  /** Rendered in the row's top-right corner. A similarity score, in practice. */
+  aside?: React.ReactNode;
+}) {
   return (
-    <li className="border-b border-ink-800 last:border-0">
+    <li className="relative border-b border-ink-800 last:border-0">
       <a href={`/dream/${dream.id}`} className="block px-1 py-4 hover:bg-ink-900/60">
         <div className="flex flex-wrap items-baseline gap-x-3 gap-y-1">
           <span className="text-sm text-ink-400 tabular-nums">
@@ -55,6 +62,13 @@ export function DreamRow({ dream }: { dream: DreamSummary }) {
           <span className="text-xs text-ink-400">{dream.wordCount} words</span>
         </div>
       </a>
+      {aside !== undefined && (
+        // Outside the anchor but inside the row, so it does not become part of
+        // the link target and does not swallow the click.
+        <span className="pointer-events-none absolute right-1 top-4 text-xs tabular-nums text-ink-400">
+          {aside}
+        </span>
+      )}
     </li>
   );
 }
@@ -73,6 +87,33 @@ export function DreamList({
     <ul className="card divide-y-0 py-0">
       {dreams.map((dream) => (
         <DreamRow key={dream.id} dream={dream} />
+      ))}
+    </ul>
+  );
+}
+
+export interface ScoredDream {
+  dream: DreamSummary;
+  /** Cosine similarity, 0-1. */
+  score: number;
+}
+
+/**
+ * A ranked list, with each row's score shown rather than hidden.
+ *
+ * A 42% match and an 88% match look identical in a list, and the difference is
+ * exactly what a reader needs in order to decide whether to trust the ranking
+ * of something they cannot see the reasoning for.
+ */
+export function ScoredDreamList({ hits }: { hits: readonly ScoredDream[] }) {
+  return (
+    <ul className="card py-0">
+      {hits.map((hit) => (
+        <DreamRow
+          key={hit.dream.id}
+          dream={hit.dream}
+          aside={`${Math.round(hit.score * 100)}%`}
+        />
       ))}
     </ul>
   );

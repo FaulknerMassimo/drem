@@ -14,7 +14,9 @@ import { eq, sql } from "drizzle-orm";
 import { db } from "@/db";
 import {
   attachments,
+  dreamSigns,
   dreams,
+  embeddings,
   insights,
   nights,
   recoveryCodes,
@@ -23,8 +25,11 @@ import {
   users,
 } from "@/db/schema";
 import { decryptString, encrypt } from "@/lib/crypto/aead";
+import { emptyRoles } from "@/lib/ai/schema";
 import { totp } from "@/lib/crypto/totp";
 import { tagFingerprint } from "@/lib/journal/tags";
+import { signFingerprint } from "@/lib/semantic/signs";
+import { packVector } from "@/lib/semantic/vectors";
 import { normalizeRecoveryCode } from "@/lib/crypto/recovery";
 import {
   AuthError,
@@ -47,7 +52,7 @@ const CANARY = "zarquon-flying-over-the-cathedral-of-bees";
 
 async function wipeDatabase() {
   await db.execute(
-    sql`truncate table ${users}, ${nights}, ${dreams}, ${tags}, ${attachments}, ${insights} restart identity cascade`,
+    sql`truncate table ${users}, ${nights}, ${dreams}, ${tags}, ${attachments}, ${insights}, ${embeddings}, ${dreamSigns} restart identity cascade`,
   );
 }
 
@@ -295,6 +300,38 @@ describe("what a stolen database actually contains", () => {
       }),
     });
 
+    const signId = randomUUID();
+    await db.insert(dreamSigns).values({
+      id: signId,
+      userId,
+      labelEnc: encrypt(keys.field, `sign: ${CANARY}`, {
+        table: "dream_signs",
+        column: "label_enc",
+        id: signId,
+      }),
+      labelBidx: signFingerprint(keys, `sign: ${CANARY}`),
+      category: "anomaly",
+    });
+
+    /*
+     * A vector is not the text, but it is a projection of it that is invertible
+     * enough to recover the gist — so it is encrypted like everything else, and
+     * the plaintext `vector` column stays null under the default backend.
+     */
+    const embeddingId = randomUUID();
+    await db.insert(embeddings).values({
+      id: embeddingId,
+      userId,
+      dreamId,
+      model: "embeddinggemma@v1",
+      dim: 4,
+      vectorEnc: encrypt(keys.vector, packVector([0.5, -0.25, 0.125, 1]), {
+        table: "embeddings",
+        column: "vector_enc",
+        id: embeddingId,
+      }),
+    });
+
     await db
       .update(settings)
       .set({
@@ -311,16 +348,18 @@ describe("what a stolen database actually contains", () => {
                 enabled: true,
               },
             ],
-            roles: { extraction: null, lucidity: null, symbolic: null, report: null, ocr: null, split: null },
+            roles: emptyRoles(),
           }),
           { table: "settings", column: "ai_config_enc", id: userId },
         ),
       })
       .where(eq(settings.userId, userId));
 
+    const database =
+      new URL(process.env.DATABASE_URL!).pathname.replace(/^\//, "") || "drem";
     return execFileSync(
       "docker",
-      ["exec", "drem-db-1", "pg_dump", "-U", "drem", "-d", "drem"],
+      ["exec", "drem-db-1", "pg_dump", "-U", "drem", "-d", database],
       { encoding: "utf8", maxBuffer: 64 * 1024 * 1024 },
     );
   }
@@ -337,6 +376,16 @@ describe("what a stolen database actually contains", () => {
     const dump = await seedAndDump();
     expect(dump).not.toContain(PASSWORD);
     expect(dump).not.toContain(process.env.MASTER_KEY);
+  });
+
+  it("keeps the plaintext vector column empty under the default backend", async () => {
+    // The one column in the schema that is readable *only* when the operator
+    // opts into SEARCH_BACKEND=pgvector. If it fills itself in without that,
+    // the trade-off documented in the README is being made for them.
+    await seedAndDump();
+    const [row] = await db.select().from(embeddings).limit(1);
+    expect(row?.vector).toBeNull();
+    expect(row?.vectorEnc).not.toBeNull();
   });
 
   it("does contain the structural metadata the heatmap needs", async () => {

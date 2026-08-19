@@ -33,7 +33,7 @@ otherwise.
 | Embeddings | `embeddinggemma:300m` (768-dim) |
 | Delivery | Phased; each phase ends runnable |
 
-Three deviations from the original plan, all deliberate:
+Four deviations from the original plan, all deliberate:
 
 - **Next 16, not 15.** Next 15 was superseded during the build; 16 is the same
   App Router architecture.
@@ -46,6 +46,12 @@ Three deviations from the original plan, all deliberate:
   makes every unwritten square a dead end. `/night/2026-08-17` shows the day's
   entries *and* offers to start one, which is what clicking an empty square is
   actually for.
+- **Entries are indexed automatically only when the embedding model is local.**
+  Search is useless if the index lags the journal, but embedding sends the entry
+  somewhere, and the rule everywhere else is that nothing leaves the machine
+  without the destination being on screen first. Splitting on locality keeps
+  both: a local model indexes as you write, a remote one has to be asked for on
+  the search page, where the badge and the acknowledgement are.
 
 ## Security model
 
@@ -87,9 +93,11 @@ current one's tests pass.
       unconfirmed), bulk multi-page import, voice memo → faster-whisper,
       JSON/Markdown/CSV import, and AI splitting of a log that contains several
       dreams into separate entries.
-- [ ] **5 — Semantic layer.** Embedding pipeline and backfill, meaning-based
-      search, "dreams like this", AI dream-sign detection with per-sign frequency
-      and lucidity correlation.
+- [x] **5 — Semantic layer.** Embedding pipeline with backfill and staleness
+      tracking, meaning-based search, "dreams like this", AI dream-sign detection
+      with per-sign frequency and lucidity correlation against the archive's own
+      lucid rate. Verified end to end over HTTP against a live database and a
+      local `embeddinggemma`.
 - [ ] **6 — Analytics and polish.** Stats dashboards (lucid rate over time,
       technique effectiveness, vividness trends), period reports, installable PWA
       with offline capture, encrypted export/import, backup docs.
@@ -104,6 +112,13 @@ nights; `dreams.dreamDate` is denormalised so heatmap queries stay single-table.
 `insights.promptVersion` exists so a prompt can be revised later and its outputs
 regenerated cleanly, rather than silently mixing results from two prompts.
 
+`embeddings.model` holds a *key*, not a bare model name: vectors from two models
+are not comparable, and neither are vectors built from two different compositions
+of the same entry, so both the model and `EMBEDDING_TEXT_VERSION` go into it and
+every search filters on it. Staleness is `embeddings.created_at <
+dreams.updated_at` — the entry is encrypted, so when each was written is the only
+honest comparison SQL can make.
+
 ## Verification
 
 - `npm test` — unit suites, no infrastructure required. The crypto suite is the
@@ -114,7 +129,7 @@ regenerated cleanly, rather than silently mixing results from two prompts.
   anywhere in it.
 - Manual, per phase: setup → 2FA enrol → write entry → heatmap updates →
   generate insight → photograph a real journal page → confirm the drafted entry
-  → semantic search finds it.
+  → semantic search finds it → scan a period and read the dream signs.
 
 ## Out of scope
 

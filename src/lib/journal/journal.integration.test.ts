@@ -28,6 +28,7 @@ import { DecryptionError } from "@/lib/crypto/aead";
 import type { UserKeys } from "@/lib/crypto/envelope";
 import { createInitialAccount } from "@/lib/auth/accounts";
 import { saveAiConfig } from "@/lib/ai/config";
+import { emptyRoles } from "@/lib/ai/schema";
 import { saveInsight } from "@/lib/ai/insights";
 import { createImageAttachment, saveTranscript } from "@/lib/capture/attachments";
 import { fieldsFromTranscript } from "@/lib/capture/fields";
@@ -593,7 +594,7 @@ describe("what a stolen database actually contains", () => {
           enabled: true,
         },
       ],
-      roles: { extraction: null, lucidity: null, symbolic: null, report: null, ocr: null, split: null },
+      roles: emptyRoles(),
     });
     const jpeg = await sharp({
       create: { width: 8, height: 8, channels: 3, background: { r: 10, g: 10, b: 20 } },
