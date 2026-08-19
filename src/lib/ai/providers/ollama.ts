@@ -38,7 +38,24 @@ export async function ollamaChat(
       num_predict: request.maxTokens,
     },
   };
-  if (request.json) body.format = "json";
+  /*
+   * `format` takes either the string "json" or a JSON Schema, and the
+   * difference is the difference between valid JSON and *usable* JSON: given
+   * only "json", a vision model reading a page it found hard answered with an
+   * object whose keys were its own invention, which parsed without error into
+   * an empty transcript and was filed as a success. A schema is compiled into
+   * the sampler's grammar, so the keys cannot drift.
+   */
+  if (request.jsonSchema) body.format = request.jsonSchema;
+  else if (request.json) body.format = "json";
+  /*
+   * `think: false` needs no capability check: Ollama only demands the thinking
+   * capability when the value is true, so switching reasoning *off* is accepted
+   * by every model, including ones that never had it. `think: true` is the
+   * asymmetric one -- it is a 400 on a model without the switch -- so a caller
+   * that starts asking for reasoning has to check first.
+   */
+  if (request.think !== undefined) body.think = request.think;
 
   const payload = await requestJson(
     joinUrl(config.baseUrl, "/api/chat"),

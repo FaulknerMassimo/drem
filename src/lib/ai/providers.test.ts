@@ -91,6 +91,36 @@ describe("Ollama adapter", () => {
     await ollamaChat(config, { ...chat, json: true }, fetchImpl as unknown as typeof fetch);
   });
 
+  it("switches reasoning off when the caller asks, and stays quiet otherwise", async () => {
+    const bodies: Record<string, unknown>[] = [];
+    const fetchImpl = vi.fn(async (_url: string | URL | Request, init?: RequestInit) => {
+      bodies.push(JSON.parse(String(init?.body)));
+      return jsonResponse({ message: { content: "{}" } });
+    });
+    await ollamaChat(config, { ...chat, think: false }, fetchImpl as unknown as typeof fetch);
+    await ollamaChat(config, chat, fetchImpl as unknown as typeof fetch);
+    expect(bodies[0]?.think).toBe(false);
+    // Unset means the model's own default, which is not ours to overrule.
+    expect(bodies[1]).not.toHaveProperty("think");
+  });
+
+  it("sends a JSON schema as the format, in place of bare json mode", async () => {
+    const bodies: Record<string, unknown>[] = [];
+    const fetchImpl = vi.fn(async (_url: string | URL | Request, init?: RequestInit) => {
+      bodies.push(JSON.parse(String(init?.body)));
+      return jsonResponse({ message: { content: "{}" } });
+    });
+    const schema = { type: "object", required: ["body"] };
+    await ollamaChat(
+      config,
+      { ...chat, json: true, jsonSchema: schema },
+      fetchImpl as unknown as typeof fetch,
+    );
+    await ollamaChat(config, { ...chat, json: true }, fetchImpl as unknown as typeof fetch);
+    expect(bodies[0]?.format).toEqual(schema);
+    expect(bodies[1]?.format).toBe("json");
+  });
+
   it("attaches images to the last user message as raw base64", async () => {
     const fetchImpl = vi.fn(async (_url: string | URL | Request, init?: RequestInit) => {
       const body = JSON.parse(String(init?.body));

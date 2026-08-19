@@ -10,7 +10,7 @@ import { recordAuthEvent } from "@/lib/auth/audit";
 import type { UserKeys } from "@/lib/crypto/envelope";
 import { completeRole, RoleNotConfiguredError } from "@/lib/ai/chat";
 import { loadAiConfig } from "@/lib/ai/config";
-import { ocrMessages } from "@/lib/ai/prompts";
+import { OCR_RESPONSE_SCHEMA, ocrMessages } from "@/lib/ai/prompts";
 import { ProviderError } from "@/lib/ai/providers/errors";
 import {
   getAttachment,
@@ -50,7 +50,11 @@ export async function runOcrJob(userId: string, keys: UserKeys, attachmentId: st
       { role: "system", content: prompt.system },
       { role: "user", content: prompt.user },
     ],
-    { json: true, images: [{ mimeType: image.mimeType, bytes: image.bytes }] },
+    {
+      json: true,
+      jsonSchema: OCR_RESPONSE_SCHEMA,
+      images: [{ mimeType: image.mimeType, bytes: image.bytes }],
+    },
   );
 
   const fields = parseExtractedFields(response.text);

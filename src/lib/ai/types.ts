@@ -101,8 +101,21 @@ export interface ChatRequest {
   temperature: number;
   /** Ask the model for a JSON object. Extraction uses this; the rest do not. */
   json?: boolean;
+  /**
+   * A JSON Schema the reply has to match, for adapters that can hold a model
+   * to one. `json` on its own buys a valid object and nothing more: the keys
+   * inside it are still the model's choice, and a reply that renames them
+   * parses cleanly into nothing. Roles whose output is read field-by-field
+   * send the schema; roles that read the whole reply do not need it.
+   */
+  jsonSchema?: Record<string, unknown>;
   /** Attached to the last user message. OCR is the only caller today. */
   images?: ChatImage[];
+  /**
+   * Whether the model may reason before answering, where it can choose.
+   * Only adapters with a switch for it act on this; the rest ignore it.
+   */
+  think?: boolean;
 }
 
 export interface ChatResponse {

@@ -140,6 +140,49 @@ const OCR_SCHEMA = `{
 }`;
 
 /**
+ * The same shape again, as a grammar the model is held to.
+ *
+ * `OCR_SCHEMA` above only *asks*. Asking was not enough: a page the model
+ * found hard came back as a well-formed object with none of these keys in it,
+ * which parsed into a blank transcript and saved as a success, and the writer
+ * got an empty form with nothing to explain it. Every key is required, so
+ * "the model read nothing" and "the model answered its own way" stop looking
+ * alike. The prose copy stays because a schema constrains the shape of an
+ * answer and not its meaning -- the wording is what asks for the writer's own
+ * words rather than a tidied paraphrase.
+ */
+const CONFIDENCE_SCHEMA = { type: "number", minimum: 0, maximum: 1 } as const;
+
+export const OCR_RESPONSE_SCHEMA: Record<string, unknown> = {
+  type: "object",
+  properties: {
+    date: { type: "string" },
+    dateConfidence: CONFIDENCE_SCHEMA,
+    title: { type: "string" },
+    titleConfidence: CONFIDENCE_SCHEMA,
+    body: { type: "string" },
+    bodyConfidence: CONFIDENCE_SCHEMA,
+    tags: { type: "array", items: { type: "string" } },
+    tagsConfidence: CONFIDENCE_SCHEMA,
+    // A page that states no rating must be able to say so; 0 is a rating.
+    lucidity: { anyOf: [{ type: "integer", minimum: 0, maximum: 5 }, { type: "null" }] },
+    lucidityConfidence: CONFIDENCE_SCHEMA,
+  },
+  required: [
+    "date",
+    "dateConfidence",
+    "title",
+    "titleConfidence",
+    "body",
+    "bodyConfidence",
+    "tags",
+    "tagsConfidence",
+    "lucidity",
+    "lucidityConfidence",
+  ],
+};
+
+/**
  * OCR of a photographed journal page. The image is attached separately;
  * this is only the instruction. Confidence is the model's own, surfaced
  * in the review UI so low-certainty fields are obvious before anything is saved.

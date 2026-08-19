@@ -56,11 +56,28 @@ const TEMPERATURE: Record<ChatRole, number> = {
   signs: 0.2,
 };
 
+/**
+ * Whether a role's model may think before it answers.
+ *
+ * Only the roles where reasoning is pure cost are listed; the rest are left at
+ * the model's own default, because working out what an entry means is exactly
+ * what they are for. Transcribing a page is not one of those: the answer is on
+ * the page, and on a local vision model at three tokens a second a few hundred
+ * tokens of deliberation is minutes of a hot GPU spent before the first word of
+ * the transcript, which is how a page ends up timing out mid-sentence. Splitting
+ * a log is the same shape of job -- find the seams in text that is already
+ * written -- against a tighter budget still.
+ */
+const THINKING: Partial<Record<ChatRole, boolean>> = {
+  ocr: false,
+  split: false,
+};
+
 export async function completeRole(
   config: AiConfig,
   role: ChatRole,
   messages: ChatMessage[],
-  options: { json?: boolean; images?: ChatImage[] } = {},
+  options: { json?: boolean; jsonSchema?: Record<string, unknown>; images?: ChatImage[] } = {},
 ): Promise<{ response: ChatResponse; destination: Destination }> {
   const destination = destinationFor(config, role);
   if (!destination.configured) throw new RoleNotConfiguredError(role);
@@ -85,7 +102,9 @@ export async function completeRole(
       maxTokens: MAX_TOKENS[role],
       temperature: TEMPERATURE[role],
       json: options.json,
+      jsonSchema: options.jsonSchema,
       images: options.images,
+      think: THINKING[role],
     },
     globalThis.fetch,
     timeoutMs,

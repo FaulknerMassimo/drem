@@ -46,6 +46,25 @@ describe("OCR field parsing", () => {
     expect(parsed.date.value).toBeNull();
   });
 
+  /*
+   * The failure this guards is not hypothetical: a vision model handed a page
+   * it found hard replied with a well-formed object of its own invention, and
+   * the review screen showed an empty form with nothing to explain it.
+   */
+  it("refuses a well-formed object that is not a transcript", () => {
+    expect(() =>
+      parseExtractedFields(JSON.stringify({ transcription: "I was flying.", certainty: 0.8 })),
+    ).toThrow();
+  });
+
+  it("still reads a page the model found blank", () => {
+    const parsed = parseExtractedFields(
+      JSON.stringify({ date: "", title: "", body: "", bodyConfidence: 0, tags: [] }),
+    );
+    expect(parsed.body.value).toBe("");
+    expect(parsed.body.confidence).toBe(0);
+  });
+
   it("does not put the reply in the thrown error", () => {
     try {
       parseExtractedFields("the cathedral of bees");

@@ -109,8 +109,48 @@ export function emptyFields(): ExtractedFields {
   };
 }
 
+/**
+ * The keys that make a reply a transcript rather than just an object.
+ *
+ * Every field here is optional, and deliberately so -- a model that reads a
+ * date but no title should not lose the date over it. The cost is that an
+ * object sharing *no* keys with the schema also parses, silently, into blanks.
+ * That is not a page with nothing on it; that is a reply we did not understand,
+ * and the two must not be filed the same way.
+ */
+const TRANSCRIPT_KEYS = [
+  "date",
+  "title",
+  "body",
+  "text",
+  "tags",
+  "lucidity",
+  "dateConfidence",
+  "titleConfidence",
+  "bodyConfidence",
+  "tagsConfidence",
+  "lucidityConfidence",
+];
+
+function hasTranscriptKey(value: unknown): boolean {
+  if (value === null || typeof value !== "object") return false;
+  return TRANSCRIPT_KEYS.some((key) => key in (value as Record<string, unknown>));
+}
+
 export function parseExtractedFields(text: string): ExtractedFields {
-  const parsed = ocrSchema.parse(parseJsonObject(text));
+  const reply = parseJsonObject(text);
+  /*
+   * Thrown rather than returned empty so the job fails, backs off and retries,
+   * and -- if the model keeps answering its own way -- says so on the review
+   * screen. Returning blanks instead hands the writer an empty form and no
+   * reason for it, which is indistinguishable from a page the model could not
+   * read. The reply itself is never quoted: it is dream-derived, and this
+   * message is persisted on the job.
+   */
+  if (!hasTranscriptKey(reply)) {
+    throw new Error("The model's reply had none of the fields a page transcript needs.");
+  }
+  const parsed = ocrSchema.parse(reply);
   const record = parsed as Record<string, unknown>;
 
   const dateRaw = stringOrNull(nestedValue(record, "date"));
