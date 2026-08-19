@@ -43,6 +43,7 @@ export default async function ImportPage() {
               stackId={stack.id}
               pages={stack.pages.length}
               destination={destinations.ocr}
+              splitDestination={destinations.split}
               csrfToken={csrfToken}
             />
           ))}

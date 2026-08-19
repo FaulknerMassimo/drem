@@ -262,18 +262,12 @@ describe("the OCR worker", () => {
         JSON.stringify({
           message: {
             content: JSON.stringify({
-              dreams: [
-                {
-                  pages: [1],
-                  date: "2026-08-17",
-                  title: "The cathedral",
-                  body: `I dreamt of ${CANARY}`,
-                  bodyConfidence: 0.77,
-                  tags: [],
-                  lucidity: null,
-                  isFragment: false,
-                },
-              ],
+              date: "2026-08-17",
+              title: "The cathedral",
+              body: `I dreamt of ${CANARY}`,
+              bodyConfidence: 0.77,
+              tags: [],
+              lucidity: null,
             }),
           },
         }),
@@ -300,12 +294,13 @@ describe("the OCR worker", () => {
 
   /*
    * The assertion the whole flow exists for. Three pages holding two dreams --
-   * one of them running across a page break -- come back as two entries from
-   * ONE model call, with the photographs filed against the entry each belongs
-   * to. Doing this a page at a time could not answer either question, and left
-   * both to the writer as a tick-box join and a second model pass.
+   * one of them running across a page break -- are copied one page at a time
+   * and then carved by the split role, with the photographs filed against the
+   * entry each belongs to. Asking a vision model to transcribe and split in
+   * the same call produced a paraphrase of the night instead of the words on
+   * the page.
    */
-  it("reads a whole stack in one call and carves it into separate dreams", async () => {
+  it("copies each page, then splits the joined log into dreams", async () => {
     const stackId = randomUUID();
     const ids: string[] = [];
     for (const shade of [10, 20, 30]) {
@@ -313,39 +308,72 @@ describe("the OCR worker", () => {
       const created = await createImageAttachment(userId, keys, prepared, stackId);
       ids.push(created.id);
     }
-    await assignVisionModel();
+    await saveAiConfig(userId, keys, {
+      providers: [
+        {
+          id: "ollama",
+          kind: "ollama",
+          name: "Ollama",
+          baseUrl: "http://127.0.0.1:11434",
+          enabled: true,
+        },
+      ],
+      roles: {
+        ...emptyRoles(),
+        ocr: { providerId: "ollama", model: "llama3.2-vision" },
+        split: { providerId: "ollama", model: "llama3.2" },
+      },
+    });
+    lendKeysToWorker();
 
-    const calls: number[] = [];
+    const pageBodies = [
+      `I dreamt of ${CANARY}, and it went on`,
+      "across the next page",
+      "Then a train.",
+    ];
+    const imageCounts: number[] = [];
+    let ocrCalls = 0;
     const fetchImpl = vi.fn(async (_url: string | URL | Request, init?: RequestInit) => {
       const body = JSON.parse(String(init?.body));
       const user = body.messages.find((message: { role: string }) => message.role === "user");
-      calls.push(user.images?.length ?? 0);
-      expect(user.content).toMatch(/pages 1 to 3/);
+      const images = user.images?.length ?? 0;
+      imageCounts.push(images);
+      if (images > 0) {
+        expect(user.content).toMatch(/Transcribe the attached page/);
+        const text = pageBodies[ocrCalls] ?? "";
+        ocrCalls += 1;
+        return new Response(
+          JSON.stringify({
+            message: {
+              content: JSON.stringify({
+                date: ocrCalls === 1 ? "2026-08-17" : "",
+                title: "",
+                body: text,
+                bodyConfidence: 0.8,
+                tags: [],
+                lucidity: null,
+              }),
+            },
+          }),
+          { headers: { "content-type": "application/json" } },
+        );
+      }
+      const system = body.messages.find((message: { role: string }) => message.role === "system");
+      expect(system.content).toMatch(/page break is not a new dream/i);
+      expect(user.content).toContain(CANARY);
+      expect(user.content).toContain("across the next page");
+      expect(user.content).toContain("Then a train.");
       return new Response(
         JSON.stringify({
           message: {
             content: JSON.stringify({
               dreams: [
                 {
-                  pages: [1, 2],
-                  date: "2026-08-17",
                   title: "The cathedral",
-                  body: `I dreamt of ${CANARY}, and it went on`,
-                  bodyConfidence: 0.8,
-                  tags: ["flying"],
-                  lucidity: 3,
+                  body: `I dreamt of ${CANARY}, and it went on across the next page`,
                   isFragment: false,
                 },
-                {
-                  pages: [3],
-                  date: "",
-                  title: "",
-                  body: "Then a train.",
-                  bodyConfidence: 0.6,
-                  tags: [],
-                  lucidity: null,
-                  isFragment: true,
-                },
+                { title: "", body: "Then a train.", isFragment: true },
               ],
             }),
           },
@@ -358,8 +386,8 @@ describe("the OCR worker", () => {
     await enqueueAttachmentJob(userId, ids[0]!, "ocr_attachment");
     expect(await processNextJob()).toBe("done");
 
-    // One call, carrying every page.
-    expect(calls).toEqual([3]);
+    // One copy per page, then one split of the joined log.
+    expect(imageCounts).toEqual([1, 1, 1, 0]);
 
     const stack = await getStack(userId, keys, stackId);
     expect(stack?.leadId).toBe(ids[0]);

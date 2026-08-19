@@ -109,7 +109,7 @@ export async function uploadPhotosAction(
   /*
    * The no-JavaScript path, and the only one that knows the whole stack up
    * front. Pages beyond `MAX_STACK_PAGES` start a new stack rather than being
-   * refused: what the ceiling bounds is one model call, not one night.
+   * refused: what the ceiling bounds is one reading job, not one night.
    */
   const ids: string[] = [];
   let stackId = randomUUID();
@@ -135,7 +135,7 @@ export async function uploadPhotosAction(
  * next one. Keeping each page in its own request also means a long night is
  * not one body large enough to hit `serverActions.bodySizeLimit`.
  *
- * Nothing is read here. The pages of one stack go to the model together, and
+ * Nothing is read here. The pages of one stack are copied together, and
  * the stack is not finished until the writer says it is — which is also where
  * the destination badge is, so a page cannot leave this machine before the
  * screen has named where it is going.
@@ -161,8 +161,8 @@ export async function uploadPhotoAction(formData: FormData): Promise<PhotoUpload
 /**
  * Sends a finished stack to the page-reading model.
  *
- * Split out from the upload for two reasons. One model call covers the whole
- * stack, so the call cannot start until the stack is closed. And this is the
+ * Split out from the upload for two reasons. Every page of the stack is
+ * copied, so the job cannot start until the stack is closed. And this is the
  * screen that names the destination: uploading used to queue the reading as a
  * side effect, which sent a photographed page to whatever model Settings held
  * without ever putting the host in front of the writer.
@@ -180,6 +180,12 @@ export async function readStackAction(
 
   const gated = await gateDestination(session, "ocr", formData);
   if (gated) return gated;
+
+  const config = await loadAiConfig(session.userId, session.keys);
+  if (destinationFor(config, "split").configured) {
+    const splitGated = await gateDestination(session, "split", formData);
+    if (splitGated) return splitGated;
+  }
 
   await enqueueAttachmentJob(session.userId, stack.leadId, "ocr_attachment");
   kickWorker();
@@ -304,9 +310,10 @@ export async function confirmReviewAction(
 /**
  * Carves the entry on screen into several, without leaving the screen.
  *
- * Only reachable for a voice memo, where there are no page breaks to read the
+ * The usual path for a voice memo, where there are no page breaks to read the
  * seams off and the transcript arrives as one block. A photographed stack is
- * already separated by the reading, which is one model call instead of two.
+ * usually already split by the reading job; this is still here for a night
+ * that arrived as one joined log — no split model, or the split pass gave up.
  */
 export async function proposeReviewSplitAction(
   _previous: ReviewFormState,

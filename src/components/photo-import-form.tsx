@@ -24,7 +24,7 @@ interface QueuedPage {
 }
 
 /**
- * Photograph the pages of one night, then have them read together.
+ * Photograph the pages of one night, then have them read.
  *
  * A phone camera hands the file input a single image per capture and replaces
  * whatever was there before, so `multiple` buys nothing on the surface this
@@ -32,17 +32,12 @@ interface QueuedPage {
  * is therefore uploaded the moment it is taken and the input is emptied for
  * the next one, which also keeps a ten-page night from arriving as one request.
  *
- * What has changed is what happens next. Uploading no longer starts a reading
- * of its own. The pages accumulate into a *stack* under one id, and one model
- * call reads the whole stack when the writer says it is complete — because the
- * two questions a handwritten night actually raises, "does this dream carry on
- * over the page" and "does this page start a new one", are questions about the
- * stack and cannot be answered a page at a time. Asking them per page pushed
- * both back onto the writer as a tick-box join and a second model pass.
- *
- * Sending the stack is a step of its own, on the page above rather than in
- * here: `StackReadForm` owns it, so it is still there after a reload and it is
- * where the destination badge goes.
+ * Uploading no longer starts a reading of its own. The pages accumulate into
+ * a *stack* under one id, and the job copies them one page at a time when the
+ * writer says the stack is complete — then joins the copies and splits the
+ * log. Sending the stack is a step of its own, on the page above rather than
+ * in here: `StackReadForm` owns it, so it is still there after a reload and
+ * it is where the destination badge goes.
  *
  * The plain form underneath is the no-JavaScript path and still posts the
  * batch action; the queue replaces its submit button once hydrated.

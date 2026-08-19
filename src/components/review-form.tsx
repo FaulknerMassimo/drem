@@ -40,14 +40,12 @@ interface Card {
  * Confirming a stack of pages, or a voice memo, into journal entries.
  *
  * The screen is a list of entries and one Save. A photographed stack arrives
- * with the list already carved, because the reading and the carving are the
- * same model call; a voice memo arrives as one entry with a Split beside it,
- * because speech has no page breaks to read the seams off.
- *
- * What used to be here — tick which other pages belong to this dream, watch
- * their text splice into a textarea, then ask a second model to take the
- * result apart again — was the writer doing the reading's job twice, with a
- * slow local model queued behind each pass.
+ * with the list already carved when a split model is assigned: each page was
+ * copied on its own, the copies were joined, and the split carved the log.
+ * A voice memo arrives as one entry with a Split beside it, because speech
+ * has no page breaks to read the seams off. A photographed stack that was
+ * not split — no model assigned, or the split pass gave up — looks the same,
+ * and the same button carves it.
  */
 export function ReviewForm({
   stack,
@@ -186,13 +184,15 @@ export function ReviewForm({
             {cards.length === 1 ? "Save to the journal" : `Save ${cards.length} entries`}
           </SubmitButton>
 
-          {stack.kind === "audio" && cards.length === 1 && (
+          {cards.length === 1 && (
             <div className="space-y-3 rounded-lg border border-ink-800 p-4">
-              <h3 className="text-sm font-medium">Several dreams in this recording?</h3>
+              <h3 className="text-sm font-medium">Several dreams in this log?</h3>
               <p className="text-xs text-ink-400">
-                Speech has no page breaks to read the seams off, so a memo
-                arrives as one entry. The model proposes the split from the text
-                above; you edit and confirm it here before anything is written.
+                {stack.kind === "audio"
+                  ? "Speech has no page breaks to read the seams off, so a memo arrives as one entry."
+                  : "The pages were copied in order and joined. If several dreams are in this log, split them here."}{" "}
+                The model proposes the split from the text above; you edit and
+                confirm it here before anything is written.
               </p>
               <DestinationBadge destination={splitDestination} what="this transcript" />
               {splitDestination.leavesMachine && splitDestination.configured && (
@@ -428,7 +428,7 @@ function ReadingState({
         <p className="text-sm text-ink-400">
           {stack.kind === "audio"
             ? "Transcribing…"
-            : `Reading ${stack.pages.length === 1 ? "the page" : `all ${stack.pages.length} pages`} together…`}{" "}
+            : `Reading ${stack.pages.length === 1 ? "the page" : `these ${stack.pages.length} pages`}…`}{" "}
           You can wait, or type over it.
         </p>
         {/*

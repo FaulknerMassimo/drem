@@ -141,8 +141,9 @@ export function SettingsForm({
         <div className="space-y-4">
           <h2 className="text-lg font-medium">Capture roles</h2>
           <p className="text-sm text-ink-400">
-            Page reading needs a vision-capable model. Splitting a log that
-            contains several dreams is text-only.
+            Page reading needs a vision-capable model; a photographed night is
+            copied one page at a time. Splitting the joined log into dreams is
+            text-only, and runs after a reading if a split model is assigned.
           </p>
           {CAPTURE_ROLES.map((role) => (
             <RoleRow

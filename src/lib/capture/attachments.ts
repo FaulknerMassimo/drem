@@ -277,9 +277,9 @@ export async function getAttachment(
  * Everything waiting for review, oldest first.
  *
  * The order is the order the pages were photographed, which is the order they
- * have to be read in: the model is handed the stack as numbered pages and
- * answers with those numbers, so page three arriving first would file the
- * dreams against the wrong photographs.
+ * have to be read in: each page is copied on its own and the copies are joined
+ * in that order, so page three arriving first would file the dreams against
+ * the wrong photographs.
  */
 export async function listInbox(
   userId: string,

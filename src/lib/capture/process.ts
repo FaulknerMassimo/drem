@@ -10,9 +10,11 @@ import { recordAuthEvent } from "@/lib/auth/audit";
 import type { UserKeys } from "@/lib/crypto/envelope";
 import { completeRole, RoleNotConfiguredError } from "@/lib/ai/chat";
 import { loadAiConfig } from "@/lib/ai/config";
-import { MAX_STACK_PAGES, OCR_RESPONSE_SCHEMA, ocrMessages } from "@/lib/ai/prompts";
-import { OCR_TIMEOUT_MS } from "@/lib/ai/providers/http";
+import { destinationFor } from "@/lib/ai/destination";
+import { MAX_STACK_PAGES, OCR_RESPONSE_SCHEMA, ocrMessages, splitMessages } from "@/lib/ai/prompts";
+import { SPLIT_TIMEOUT_MS } from "@/lib/ai/providers/http";
 import { publicModelError } from "@/lib/ai/public-error";
+import type { AiConfig } from "@/lib/ai/types";
 import {
   getAttachment,
   imageBytesForModel,
@@ -22,7 +24,17 @@ import {
   saveReading,
   stackPageIds,
 } from "./attachments";
-import { dreamFromTranscript, parseStackReading } from "./fields";
+import {
+  dreamFromTranscript,
+  emptyDream,
+  joinPageTranscripts,
+  mergePageTranscripts,
+  parsePageTranscript,
+  parseSplitParts,
+  readingFromPages,
+  type ReadDream,
+  type SplitPart,
+} from "./fields";
 import { transcribeAudio } from "./whisper";
 
 class SkipError extends Error {
@@ -35,33 +47,33 @@ class SkipError extends Error {
 export { SkipError as CaptureSkipError };
 
 /**
- * What one reading may spend, given how many pages it carries.
+ * What the split pass may spend, given how many pages the log was copied from.
  *
- * The per-role ceilings in `chat.ts` are written for a call whose cost is
- * fixed. A stack's is not: every page is another image in the request and
- * another page of handwriting that has to come back inside the JSON before
- * there is anything to parse, so both halves scale with the stack. The old
- * one-page budget applied to a four-page stack does not fail cleanly -- it
- * cuts the transcript off mid-sentence at the same place every time, which is
- * the failure the split role was already caught by.
- *
- * Linear in the page count, and bounded only because `MAX_STACK_PAGES` is.
- * Nobody waits on this: it is a queued job behind a screen that polls.
+ * The split's answer is the log written out again inside JSON, so both the
+ * token ceiling and the wait scale with the stack. The role's own 4096-token
+ * budget is written for a typed entry; four photographed pages joined together
+ * are the failure that budget was already caught by — a transcript cut off
+ * mid-sentence at the same place every time.
  */
-function readingBudget(pageCount: number): { maxTokens: number; timeoutMs: number } {
+function splitBudget(pageCount: number): { maxTokens: number; timeoutMs: number } {
   const pages = Math.max(1, Math.min(pageCount, MAX_STACK_PAGES));
-  return { maxTokens: 4096 * pages, timeoutMs: OCR_TIMEOUT_MS * pages };
+  return { maxTokens: 4096 * pages, timeoutMs: SPLIT_TIMEOUT_MS * pages };
 }
 
 /**
  * Reads one stack of photographed pages into its separate dreams.
  *
- * The job is enqueued against the stack's lead page and covers every page of
- * it, because "does this dream carry on over the page" and "does this page
- * start a new one" are questions about the stack rather than about any page in
- * it. Reading page by page could not answer either, and pushed both back onto
- * the writer as a tick-box join followed by a second model pass to split the
- * joined text apart again.
+ * Each page is copied on its own. A vision model handed several images and
+ * asked to transcribe *and* carve them produced a paraphrase of the night
+ * instead of the words on the page — mixed fragments, invented spellings,
+ * lost lines — and changing the prompt or the model did not recover the
+ * copy. One image, one transcript is the job the model can do.
+ *
+ * The copies are then joined in photograph order and, if a split model is
+ * assigned, carved into dreams as a text-only pass. That is the original
+ * pipeline, minus the tick-box join: the stack already says which pages
+ * belong together, and "does this dream carry on over the page" is a
+ * question about the joined log, not about any photograph in it.
  */
 export async function runOcrJob(userId: string, keys: UserKeys, leadId: string): Promise<void> {
   const lead = await getAttachment(userId, keys, leadId);
@@ -73,48 +85,116 @@ export async function runOcrJob(userId: string, keys: UserKeys, leadId: string):
 
   await markStackStatus(userId, lead.stackId, "running");
 
-  const images = [];
-  for (const pageId of pageIds) {
-    const image = await imageBytesForModel(userId, keys, pageId);
-    // A page that will not decode is dropped rather than failing the stack:
-    // the rest of the night is still readable, and the writer can see which
-    // photograph has no text against it on the review screen.
-    if (image) images.push({ mimeType: image.mimeType, bytes: image.bytes });
-  }
-  if (images.length === 0) throw new SkipError("Those photographs could not be read.");
-
   const config = await loadAiConfig(userId, keys);
-  const prompt = ocrMessages(images.length);
-  const { response, destination } = await completeRole(
-    config,
-    "ocr",
-    [
-      { role: "system", content: prompt.system },
-      { role: "user", content: prompt.user },
-    ],
-    {
-      json: true,
-      jsonSchema: OCR_RESPONSE_SCHEMA,
-      images,
-      budget: readingBudget(images.length),
-    },
-  );
+  const pages = await copyPages(userId, keys, config, pageIds);
+  const log = joinPageTranscripts(pages);
+  if (!log) throw new Error("The model returned no dream text for those pages.");
 
-  const dreams = parseStackReading(response.text, images.length);
+  const parts = await splitCopiedLog(userId, config, log, pages.length);
+  const dreams = parts ? readingFromPages(pages, parts) : [mergePageTranscripts(pages)];
+
   await saveReading(userId, keys, leadId, dreams);
   await markStackStatus(userId, lead.stackId, "succeeded");
+}
 
-  await recordAuthEvent("ai_request", {
-    userId,
-    detail: {
-      kind: "ocr",
-      provider: destination.providerKind,
-      host: destination.host,
-      leavesMachine: destination.leavesMachine,
-      pages: images.length,
-      dreams: dreams.length,
-    },
-  });
+async function copyPages(
+  userId: string,
+  keys: UserKeys,
+  config: AiConfig,
+  pageIds: string[],
+): Promise<ReadDream[]> {
+  const prompt = ocrMessages();
+  const pages: ReadDream[] = [];
+  let ocrDestination = null;
+
+  for (let i = 0; i < pageIds.length; i++) {
+    const image = await imageBytesForModel(userId, keys, pageIds[i]!);
+    if (!image) {
+      // An undecodable page keeps its slot so later pages stay numbered
+      // against the strip on the review screen. An empty body contributes
+      // nothing to the joined log.
+      pages.push({ ...emptyDream(), pages: [i + 1] });
+      continue;
+    }
+
+    const { response, destination } = await completeRole(
+      config,
+      "ocr",
+      [
+        { role: "system", content: prompt.system },
+        { role: "user", content: prompt.user },
+      ],
+      {
+        json: true,
+        jsonSchema: OCR_RESPONSE_SCHEMA,
+        images: [{ mimeType: image.mimeType, bytes: image.bytes }],
+      },
+    );
+    ocrDestination = destination;
+    const transcript = parsePageTranscript(response.text);
+    pages.push({ ...transcript, pages: [i + 1] });
+  }
+
+  if (!ocrDestination && pages.every((page) => !page.body.value)) {
+    throw new SkipError("Those photographs could not be read.");
+  }
+
+  if (ocrDestination) {
+    await recordAuthEvent("ai_request", {
+      userId,
+      detail: {
+        kind: "ocr",
+        provider: ocrDestination.providerKind,
+        host: ocrDestination.host,
+        leavesMachine: ocrDestination.leavesMachine,
+        pages: pageIds.length,
+      },
+    });
+  }
+
+  return pages;
+}
+
+/**
+ * Carves the joined copies into dreams, if a split model is assigned.
+ *
+ * A split that fails after a good copy is not a failed reading: the writer
+ * still has the words, and the review screen can split them. Failing the job
+ * would re-copy every page to retry a text-only pass.
+ */
+async function splitCopiedLog(
+  userId: string,
+  config: AiConfig,
+  log: string,
+  pageCount: number,
+): Promise<SplitPart[] | null> {
+  if (!destinationFor(config, "split").configured) return null;
+  try {
+    const prompt = splitMessages(log, "pages");
+    const { response, destination } = await completeRole(
+      config,
+      "split",
+      [
+        { role: "system", content: prompt.system },
+        { role: "user", content: prompt.user },
+      ],
+      { json: true, budget: splitBudget(pageCount) },
+    );
+    await recordAuthEvent("ai_request", {
+      userId,
+      detail: {
+        kind: "split",
+        provider: destination.providerKind,
+        host: destination.host,
+        leavesMachine: destination.leavesMachine,
+      },
+    });
+    return parseSplitParts(response.text);
+  } catch {
+    // The copies are already in hand. Failing here would re-photograph every
+    // page to retry a text-only pass; the review screen can still split.
+    return null;
+  }
 }
 
 export async function runTranscribeJob(

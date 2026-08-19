@@ -180,16 +180,16 @@ them.
   indices are the same rule (`pageList()` in `capture/fields.ts`): a page
   number the stack does not have is dropped, because clamping files a
   photograph against a dream it has nothing to do with.
-- **A photographed night is read as a stack, not a page at a time.** One model
-  call carries every page of the stack and answers with the *dreams*, because
-  "does this dream carry on over the page" and "does this page start a new one"
-  are questions about the stack. Reading per page could answer neither, and
-  pushed both onto the writer as a tick-box join plus a second split pass. The
-  cost is that the budget scales with the stack — see `readingBudget()` in
-  `capture/process.ts` — and that `MAX_STACK_PAGES` bounds what one call may
-  carry. Raising it without raising the budget reproduces the failure the
-  split role was already caught by: a transcript cut off mid-sentence at the
-  same place every time.
+- **A photographed night is copied a page at a time, then split.** One vision
+  call carrying every page and answering with the *dreams* produced a
+  paraphrase of the night instead of the words on the page — mixed fragments,
+  invented spellings, lost lines — and changing the prompt or the model did
+  not recover the copy. Each page is transcribed on its own; the copies are
+  joined in photograph order; the existing split role carves the log. The
+  stack still groups the night (no tick-box join). `MAX_STACK_PAGES` bounds
+  how many photographs one job will copy. Raising it without raising the
+  split budget reproduces the failure the split role was already caught by:
+  a transcript cut off mid-sentence at the same place every time.
 - **A reviewed capture is not a draft.** `isDraft` means "captured, not yet
   written up", which is what 3am capture mode leaves behind because it
   deliberately asks nothing. The review screen has just asked for everything,

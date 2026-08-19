@@ -55,7 +55,7 @@ const TEMPERATURE: Record<ChatRole, number> = {
   lucidity: 0.5,
   symbolic: 0.6,
   report: 0.4,
-  ocr: 0.1,
+  ocr: 0,
   split: 0.1,
   // A dream-sign scan is a clustering job over an archive, not a creative one.
   signs: 0.2,
@@ -90,11 +90,10 @@ const TIMEOUTS: Partial<Record<ChatRole, number>> = {
  * What a call may spend, when the role's own ceiling is the wrong shape for it.
  *
  * `MAX_TOKENS` and `TIMEOUTS` assume a role costs about the same every time.
- * One role does not: reading a *stack* of photographed pages puts every page
- * in the same request and gets every page of handwriting back inside the JSON,
- * so both halves scale with how many pages were photographed. The caller that
- * knows the page count passes the budget rather than this module guessing at
- * it from the message array.
+ * Splitting a *stack* of photographed pages writes the joined log out again
+ * inside JSON, so both halves scale with how many pages were copied. The
+ * caller that knows the page count passes the budget rather than this module
+ * guessing at it from the message array.
  */
 export interface ChatBudget {
   maxTokens?: number;

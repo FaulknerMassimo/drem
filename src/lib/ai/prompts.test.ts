@@ -26,10 +26,10 @@ describe("insight prompts", () => {
     expect(PROMPT_VERSIONS.extraction).toBe("extraction.v1");
     expect(PROMPT_VERSIONS.lucidity).toBe("lucidity.v1");
     expect(PROMPT_VERSIONS.symbolic).toBe("symbolic.v1");
-    expect(PROMPT_VERSIONS.split).toBe("split.v1");
-    // v2 is the stack reading: one call over every page, answering with the
-    // dreams rather than with one page's fields.
-    expect(PROMPT_VERSIONS.ocr).toBe("ocr.v2");
+    expect(PROMPT_VERSIONS.split).toBe("split.v2");
+    // v5 copies one page at a time; v2–v4 asked a vision model to transcribe
+    // and carve a whole stack in one call, which paraphrased the night.
+    expect(PROMPT_VERSIONS.ocr).toBe("ocr.v5");
   });
 
   it("puts the dream in the user message, not the system prompt", () => {
@@ -64,38 +64,18 @@ describe("insight prompts", () => {
   });
 
   it("keeps the photographed page out of the OCR system prompt", () => {
-    const prompt = ocrMessages(1);
-    expect(prompt.system).toMatch(/literal/i);
+    const prompt = ocrMessages();
+    expect(prompt.system).toMatch(/transcribe/i);
     expect(prompt.system).toMatch(/JSON/i);
+    expect(prompt.system).not.toContain("cathedral");
   });
 
-  it("tells the reading how many pages it was handed, and that they are ordered", () => {
-    const prompt = ocrMessages(3);
-    expect(prompt.user).toContain("3 attached images");
-    expect(prompt.user).toMatch(/pages 1 to 3/);
-    expect(prompt.user).toMatch(/in the order they were written/);
-  });
-
-  /*
-   * The two questions the whole flow turns on. Reading page by page could
-   * answer neither, which is what pushed the join and the split back onto the
-   * writer as two manual passes over the same text.
-   */
-  it("asks a multi-page reading to carry a dream over the page break", () => {
-    const prompt = ocrMessages(2);
-    expect(prompt.user).toMatch(/ONE dream/);
-    expect(prompt.user).toMatch(/list both page numbers/);
-    expect(prompt.user).toMatch(/start a new dream partway down/);
-  });
-
-  it("does not talk about page breaks when there is only one page", () => {
-    const prompt = ocrMessages(1);
-    expect(prompt.user).not.toMatch(/ONE dream/);
-    expect(prompt.user).toContain("It is page 1.");
-  });
-
-  it("refuses to invent a split in the system prompt", () => {
-    expect(ocrMessages(4).system).toMatch(/never invent a split/i);
+  it("asks for one page, not a stack of dreams", () => {
+    const prompt = ocrMessages();
+    expect(prompt.user).toMatch(/Transcribe the attached page/);
+    expect(prompt.user).not.toMatch(/pages 1 to/);
+    expect(prompt.system).not.toMatch(/ONE dream/);
+    expect(prompt.system).toMatch(/Be literal/);
   });
 
   /*
@@ -103,16 +83,22 @@ describe("insight prompts", () => {
    * caught by -- a well-formed object with none of these keys in it used to
    * parse into a blank form with nothing to explain it.
    */
-  it("holds the reading to a required dreams array", () => {
-    expect(OCR_RESPONSE_SCHEMA.required).toEqual(["dreams"]);
-    const dreams = (OCR_RESPONSE_SCHEMA.properties as Record<string, { items: { required: string[] } }>)
-      .dreams!;
-    expect(dreams.items.required).toContain("pages");
-    expect(dreams.items.required).toContain("body");
-    expect(dreams.items.required).toContain("isFragment");
+  it("holds a page copy to the transcript fields", () => {
+    expect(OCR_RESPONSE_SCHEMA.required).toEqual([
+      "date",
+      "dateConfidence",
+      "title",
+      "titleConfidence",
+      "body",
+      "bodyConfidence",
+      "tags",
+      "tagsConfidence",
+      "lucidity",
+      "lucidityConfidence",
+    ]);
   });
 
-  it("caps a stack at what one call can carry", () => {
+  it("caps a stack at a night a job can copy page by page", () => {
     expect(MAX_STACK_PAGES).toBeGreaterThan(1);
     expect(MAX_STACK_PAGES).toBeLessThanOrEqual(8);
   });
@@ -122,5 +108,11 @@ describe("insight prompts", () => {
     expect(prompt.user).toContain("I was flying");
     expect(prompt.system).not.toContain("I was flying");
     expect(prompt.system).toMatch(/Keep the writer's words/);
+  });
+
+  it("tells a page-log split that a page break is not a new dream", () => {
+    const fromPages = splitMessages("I was flying.", "pages");
+    expect(fromPages.system).toMatch(/page break is not a new dream/i);
+    expect(splitMessages("I was flying.").system).not.toMatch(/page break/);
   });
 });

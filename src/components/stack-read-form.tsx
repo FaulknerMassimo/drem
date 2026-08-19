@@ -17,8 +17,8 @@ import { CSRF_FIELD } from "@/lib/security/constants";
  * whatever model Settings held without the host ever being named on screen —
  * the one thing the rest of the app refuses to do. It also meant the reading
  * started before the writer had finished photographing, which is the wrong
- * moment: one call reads the whole stack, so it cannot start until the stack
- * is complete.
+ * moment: every page of the stack is copied, so the job cannot start until
+ * the stack is complete.
  *
  * Living on the page rather than in the uploader's local state is what makes
  * it survive: pages photographed and then navigated away from are still here,
@@ -28,29 +28,44 @@ export function StackReadForm({
   stackId,
   pages,
   destination,
+  splitDestination,
   csrfToken,
 }: {
   stackId: string;
   pages: number;
   destination: Destination;
+  splitDestination: Destination;
   csrfToken: string;
 }) {
   const [readState, readAction] = useActionState<CaptureFormState, FormData>(readStackAction, {});
   const [skipState, skipAction] = useActionState<CaptureFormState, FormData>(skipStackAction, {});
   const what = pages === 1 ? "this page" : `these ${pages} pages`;
+  const remote = [destination, splitDestination].filter(
+    (item) => item.configured && item.leavesMachine,
+  );
+  const remoteHosts = [...new Set(remote.map((item) => item.host))];
 
   return (
     <div className="card space-y-3">
       <p className="text-sm text-ink-200">
         {pages === 1 ? "1 page" : `${pages} pages`} photographed, not read yet.
-        {pages > 1 && " They are read together, so a dream that carries over a page break stays one entry."}
+        {pages > 1 &&
+          (splitDestination.configured
+            ? " They are copied one page at a time, then split into dreams, so a dream that carries over a page break stays one entry."
+            : " They are copied one page at a time and joined in order.")}
       </p>
 
       <form action={readAction} className="space-y-3">
         <input type="hidden" name={CSRF_FIELD} value={csrfToken} />
         <input type="hidden" name="stackId" value={stackId} />
         <DestinationBadge destination={destination} what={what} />
-        {destination.leavesMachine && destination.configured && (
+        {splitDestination.configured && (
+          <DestinationBadge
+            destination={splitDestination}
+            what={pages === 1 ? "the copied page" : "the joined copies"}
+          />
+        )}
+        {remote.length > 0 && (
           <label className="flex items-start gap-3 text-sm text-ink-200">
             <input
               type="checkbox"
@@ -58,7 +73,9 @@ export function StackReadForm({
               value="1"
               className="mt-0.5 size-4 accent-warn-500"
             />
-            <span>I understand {what} will be sent to {destination.host}.</span>
+            <span>
+              I understand {what} will be sent to {remoteHosts.join(" and ")}.
+            </span>
           </label>
         )}
         <FormError message={readState.error} />

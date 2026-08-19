@@ -38,8 +38,9 @@ export const CAPTURE_ROLE_LABELS: Record<CaptureRole, string> = {
 };
 
 export const CAPTURE_ROLE_HINTS: Record<CaptureRole, string> = {
-  ocr: "Reads a photographed handwritten page. Assign a vision-capable model (llama3.2-vision, gpt-4o, Claude, …).",
-  split: "Carves a log that contains several dreams into separate entries. Text only — any model will do.",
+  ocr: "Copies one photographed handwritten page. Assign a vision-capable model (llama3.2-vision, gpt-4o, Claude, …).",
+  split:
+    "Carves a joined night — photographed pages or a voice memo — into separate dreams. Text only — any model will do.",
 };
 
 export const SEMANTIC_ROLE_LABELS: Record<SemanticRole, string> = {

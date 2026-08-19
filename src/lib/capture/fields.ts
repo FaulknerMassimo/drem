@@ -202,12 +202,45 @@ function readDreamFrom(reply: unknown, pageCount: number): ReadDream {
 }
 
 /**
- * What one model call made of a stack of pages: its separate dreams.
+ * One photographed page, copied. Splitting is a later, text-only pass.
+ *
+ * A model that still wraps a single page in `{ dreams: [...] }` has the words
+ * we need; joining those bodies here keeps every word and leaves the carving
+ * to the split role, which is looking at text rather than at handwriting.
+ */
+export function parsePageTranscript(text: string): ReadDream {
+  const dreams = parseStackReading(text, 1);
+  if (dreams.length === 1) {
+    return { ...dreams[0]!, pages: [], isFragment: false };
+  }
+  const body = dreams
+    .map((dream) => dream.body.value.trim())
+    .filter(Boolean)
+    .join("\n");
+  const first = dreams[0]!;
+  const confidences = dreams
+    .map((dream) => dream.body.confidence)
+    .filter((value): value is number => value !== null);
+  return {
+    ...first,
+    body: {
+      value: clip(body, MAX_BODY_LENGTH),
+      confidence: confidences.length > 0 ? Math.min(...confidences) : first.body.confidence,
+    },
+    raw: clip(body, MAX_BODY_LENGTH),
+    isFragment: false,
+    pages: [],
+  };
+}
+
+/**
+ * Dreams as the model actually wrote them — including a `{ dreams: [...] }`
+ * wrapper, a bare transcript object, or chatter around the JSON.
  *
  * A bare transcript object -- no `dreams` array, just the fields -- is read as
  * a stack holding one dream rather than rejected. That is what a model does
  * when it decides the schema's wrapper is noise, and it is a correct answer to
- * a one-page stack written the wrong way round; refusing it would fail a
+ * a one-page copy written the wrong way round; refusing it would fail a
  * reading that is entirely usable.
  */
 export function parseStackReading(text: string, pageCount: number): ReadDream[] {
@@ -238,7 +271,203 @@ export function parseStackReading(text: string, pageCount: number): ReadDream[] 
   if (dreams.length === 0) {
     throw new Error("The model returned no dream text for those pages.");
   }
+  assertPagesCovered(dreams, pageCount);
   return dreams;
+}
+
+/**
+ * A stack handed N pages must come back with every page accounted for.
+ *
+ * Vision models often transcribe page 1 and stop. Treating that as success
+ * hands the writer a reading that silently drops the rest of the night; failing
+ * here lets the job retry instead.
+ */
+function assertPagesCovered(dreams: ReadDream[], pageCount: number): void {
+  if (pageCount <= 1) return;
+  const covered = new Set<number>();
+  for (const dream of dreams) {
+    for (const page of dream.pages) covered.add(page);
+  }
+  const missing: number[] = [];
+  for (let page = 1; page <= pageCount; page++) {
+    if (!covered.has(page)) missing.push(page);
+  }
+  if (missing.length > 0) {
+    throw new Error(
+      `The reading did not include page${missing.length === 1 ? "" : "s"} ${missing.join(", ")}.`,
+    );
+  }
+}
+
+/**
+ * The pages of one stack, copied in photograph order, as a single log.
+ *
+ * Joined with a newline rather than a paragraph break: a dream that continues
+ * mid-sentence onto the next page should not look like a scene change to the
+ * split pass. Empty pages contribute nothing to the log; they still occupy a
+ * slot in the page list so later pages keep their numbers.
+ */
+export function joinPageTranscripts(pages: ReadDream[]): string {
+  return pages
+    .map((page) => page.body.value.trim())
+    .filter(Boolean)
+    .join("\n");
+}
+
+/**
+ * Which pages of the stack each split part was written across.
+ *
+ * The split is told to keep the writer's words, so each part should appear in
+ * the concatenated log. Matching is done on folded whitespace so a newline at
+ * a page break does not hide a hit. A part that cannot be placed is left with
+ * no pages rather than a guess: the same rule as a page number the stack does
+ * not have, and unclaimed photographs still fall to the first entry on save.
+ */
+export function pagesForParts(pageBodies: string[], parts: SplitPart[]): number[][] {
+  const folded = pageBodies.map(fold);
+  let haystack = "";
+  const ranges: { page: number; start: number; end: number }[] = [];
+  for (let i = 0; i < folded.length; i++) {
+    const page = folded[i]!;
+    if (haystack.length > 0 && page) haystack += " ";
+    const start = haystack.length;
+    haystack += page;
+    ranges.push({ page: i + 1, start, end: haystack.length });
+  }
+
+  let cursor = 0;
+  return parts.map((part) => {
+    const span = locate(fold(part.body), haystack, cursor);
+    if (!span) return [];
+    cursor = span.end;
+    return ranges
+      .filter((range) => range.start < span.end && range.end > span.start && range.start !== range.end)
+      .map((range) => range.page);
+  });
+}
+
+function fold(text: string): string {
+  return text.toLowerCase().replace(/\s+/g, " ").trim();
+}
+
+function locate(
+  needle: string,
+  haystack: string,
+  from: number,
+): { start: number; end: number } | null {
+  if (!needle || !haystack) return null;
+  const exact = indexFrom(haystack, needle, from);
+  if (exact >= 0) return { start: exact, end: exact + needle.length };
+
+  const prefixLen = Math.min(80, needle.length);
+  if (prefixLen >= 24) {
+    const prefix = needle.slice(0, prefixLen);
+    const at = indexFrom(haystack, prefix, from);
+    if (at >= 0) return { start: at, end: Math.min(haystack.length, at + needle.length) };
+  }
+  return null;
+}
+
+function indexFrom(haystack: string, needle: string, from: number): number {
+  const later = haystack.indexOf(needle, from);
+  if (later >= 0) return later;
+  return haystack.indexOf(needle);
+}
+
+/**
+ * The night as the review screen should see it: split parts, with the pages
+ * each was copied from and the date/tags/lucidity those pages stated.
+ *
+ * Title and body come from the split, which is looking at the writer's words
+ * rather than at a photograph. Date is the night's date — usually written on
+ * the first page — and is applied to every part, because the review form files
+ * the whole stack under one night.
+ */
+export function readingFromPages(pages: ReadDream[], parts: SplitPart[]): ReadDream[] {
+  if (parts.length === 0) return [mergePageTranscripts(pages)];
+  const bodies = pages.map((page) => page.body.value);
+  const spanned = pagesForParts(bodies, parts);
+  const nightDate = pages.find((page) => page.date.value)?.date ?? { value: null, confidence: null };
+
+  return parts.map((part, index) => {
+    const pageNums = spanned[index] ?? [];
+    const fromPages = pageNums
+      .map((number) => pages[number - 1])
+      .filter((page): page is ReadDream => Boolean(page));
+    const tags = uniqueTags(fromPages.flatMap((page) => page.tags.value));
+    const lucidity =
+      fromPages.find((page) => page.lucidity.value !== null)?.lucidity ??
+      { value: null, confidence: null };
+    const confidences = fromPages
+      .map((page) => page.body.confidence)
+      .filter((value): value is number => value !== null);
+    const body = clip(part.body, MAX_BODY_LENGTH);
+    return {
+      date: nightDate,
+      title: {
+        value: part.title ? clip(part.title, MAX_TITLE_LENGTH) : null,
+        confidence: null,
+      },
+      body: {
+        value: body,
+        confidence: confidences.length > 0 ? Math.min(...confidences) : null,
+      },
+      tags: { value: tags, confidence: null },
+      lucidity,
+      raw: body,
+      isFragment: part.isFragment,
+      pages: pageNums,
+    };
+  });
+}
+
+/**
+ * Every page of the stack as one dream, when there is no split to carve by.
+ *
+ * All page numbers that hold text are listed, so the photographs file with
+ * the entry. A blank page is left unclaimed and falls to the first entry on
+ * save, same as any other page the reading did not name.
+ */
+export function mergePageTranscripts(pages: ReadDream[]): ReadDream {
+  const withText = pages
+    .map((page, index) => ({ page, number: index + 1 }))
+    .filter(({ page }) => page.body.value.trim());
+  const body = joinPageTranscripts(pages);
+  const source = withText[0]?.page ?? pages[0] ?? emptyDream();
+  const tags = uniqueTags(pages.flatMap((page) => page.tags.value));
+  const lucidity =
+    pages.find((page) => page.lucidity.value !== null)?.lucidity ?? source.lucidity;
+  const date = pages.find((page) => page.date.value)?.date ?? source.date;
+  const title = pages.find((page) => page.title.value)?.title ?? source.title;
+  const confidences = withText
+    .map(({ page }) => page.body.confidence)
+    .filter((value): value is number => value !== null);
+  return {
+    date,
+    title,
+    body: {
+      value: body,
+      confidence: confidences.length > 0 ? Math.min(...confidences) : source.body.confidence,
+    },
+    tags: { value: tags, confidence: null },
+    lucidity,
+    raw: body,
+    isFragment: false,
+    pages: withText.map(({ number }) => number),
+  };
+}
+
+function uniqueTags(tags: string[]): string[] {
+  const seen = new Set<string>();
+  const out: string[] = [];
+  for (const tag of tags) {
+    const key = tag.toLowerCase();
+    if (seen.has(key)) continue;
+    seen.add(key);
+    out.push(tag);
+    if (out.length >= MAX_TAGS_PER_DREAM) break;
+  }
+  return out;
 }
 
 /** A speech transcript: one dream, no page structure to speak of. */

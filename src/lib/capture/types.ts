@@ -29,7 +29,7 @@ export interface SplitPart {
  * One dream, as a stack of pages was read.
  *
  * The fields a page states, plus the two facts that only make sense once the
- * whole stack has been read together: whether this is a fragment, and which
+ * copies have been joined and split: whether this is a fragment, and which
  * pages of the stack it was written across.
  */
 export interface ReadDream extends ExtractedFields {
@@ -69,11 +69,11 @@ export interface ReviewPage {
 }
 
 /**
- * A stack of pages and what one model call made of them.
+ * A stack of pages and what the reading job made of them.
  *
  * The stack has no row of its own — a table whose only column is a uuid would
  * be one — so it is keyed by the `stack_id` its pages share. `dreams` is empty
- * until the reading lands, and holds one entry per dream the model found,
+ * until the reading lands, and holds one entry per dream the job found,
  * which is not one per page and is the whole reason the stack is the unit.
  */
 export interface ReviewStack {

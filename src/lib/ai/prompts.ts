@@ -14,8 +14,8 @@ export const PROMPT_VERSIONS: Record<ChatRole, string> = {
   lucidity: "lucidity.v1",
   symbolic: "symbolic.v1",
   report: "report.v1",
-  ocr: "ocr.v2",
-  split: "split.v1",
+  ocr: "ocr.v5",
+  split: "split.v2",
   signs: "signs.v1",
 };
 
@@ -127,35 +127,26 @@ export function messagesFor(
 }
 
 /**
- * How many pages one reading may carry.
+ * How many pages one reading job may carry.
  *
  * Not a storage limit -- `MAX_UPLOAD_BATCH` is twenty and stays there. This is
- * what one model call can hold: every page is an image in the same request,
- * and every word on every page has to come back inside the JSON before there
- * is anything to parse, so both the context and the answer grow with the
- * stack. Against a local vision model at 4-6 tok/s, four pages is already a
- * quarter of an hour of output. A longer night is photographed as more than
- * one stack, which costs a second review screen and nothing else.
+ * how many photographs one job will copy, one page at a time, before the
+ * split pass carves the joined log. A longer night is photographed as more
+ * than one stack, which costs a second review screen and nothing else.
  */
 export const MAX_STACK_PAGES = 4;
 
 const OCR_SCHEMA = `{
-  "dreams": [
-    {
-      "pages": [1],
-      "date": "YYYY-MM-DD or empty if none is written",
-      "dateConfidence": 0.0,
-      "title": "short title if the page has one, else empty",
-      "titleConfidence": 0.0,
-      "body": "the dream text, preserving the writer's words",
-      "bodyConfidence": 0.0,
-      "tags": ["short labels only if clearly written as tags"],
-      "tagsConfidence": 0.0,
-      "lucidity": null,
-      "lucidityConfidence": 0.0,
-      "isFragment": false
-    }
-  ]
+  "date": "YYYY-MM-DD or empty if none is written",
+  "dateConfidence": 0.0,
+  "title": "short title if the page has one, else empty",
+  "titleConfidence": 0.0,
+  "body": "the dream text, preserving the writer's words",
+  "bodyConfidence": 0.0,
+  "tags": ["short labels only if clearly written as tags"],
+  "tagsConfidence": 0.0,
+  "lucidity": null,
+  "lucidityConfidence": 0.0
 }`;
 
 /**
@@ -172,13 +163,9 @@ const OCR_SCHEMA = `{
  */
 const CONFIDENCE_SCHEMA = { type: "number", minimum: 0, maximum: 1 } as const;
 
-const READ_DREAM_SCHEMA: Record<string, unknown> = {
+export const OCR_RESPONSE_SCHEMA: Record<string, unknown> = {
   type: "object",
   properties: {
-    // Which pages of the stack this dream was written across. Asked for as
-    // indices rather than quotes for the same reason the dream-sign scan does:
-    // matching prose back against the pages to find out is a worse guess.
-    pages: { type: "array", items: { type: "integer", minimum: 1 } },
     date: { type: "string" },
     dateConfidence: CONFIDENCE_SCHEMA,
     title: { type: "string" },
@@ -190,10 +177,8 @@ const READ_DREAM_SCHEMA: Record<string, unknown> = {
     // A page that states no rating must be able to say so; 0 is a rating.
     lucidity: { anyOf: [{ type: "integer", minimum: 0, maximum: 5 }, { type: "null" }] },
     lucidityConfidence: CONFIDENCE_SCHEMA,
-    isFragment: { type: "boolean" },
   },
   required: [
-    "pages",
     "date",
     "dateConfidence",
     "title",
@@ -204,49 +189,26 @@ const READ_DREAM_SCHEMA: Record<string, unknown> = {
     "tagsConfidence",
     "lucidity",
     "lucidityConfidence",
-    "isFragment",
   ],
 };
 
-export const OCR_RESPONSE_SCHEMA: Record<string, unknown> = {
-  type: "object",
-  properties: {
-    dreams: { type: "array", minItems: 1, items: READ_DREAM_SCHEMA },
-  },
-  required: ["dreams"],
-};
-
 /**
- * Reads a stack of photographed journal pages into separate dreams.
+ * OCR of one photographed journal page.
  *
- * One call, not one per page, and that is the point of the whole flow. Reading
- * page by page can only ever answer "what does this page say"; the two things
- * the writer actually needs answered -- does this dream carry on over the page,
- * and does this page start a new one -- are questions about the stack. Asking
- * them page by page pushed both back onto the writer as a tick-box join and a
- * second model pass to split the result apart again, which is two waits and
- * two decisions for something a model looking at all the pages at once can
- * answer while it transcribes.
+ * One image, one copy of the handwriting, nothing else. Asking a vision model
+ * to transcribe several pages *and* carve them into dreams in the same call
+ * produced a paraphrase of the night instead of the words on the page — mixed
+ * fragments, invented spellings, lost lines. Copying a single page is the
+ * job the model can actually do; joining the copies and splitting the log
+ * are text-only passes afterwards.
  *
- * The pages are attached in the order they were photographed and numbered here
- * to match, so "pages" comes back as indices into a list the caller already
- * has. Continuation is stated rather than inferred: a dream running from the
- * bottom of page one onto page two is *one* item whose body spans both, never
- * two items to be stitched later.
+ * The image is attached separately; this is only the instruction.
  */
-export function ocrMessages(pageCount: number) {
-  const many = pageCount > 1;
-  const pageList = many
-    ? `The ${pageCount} attached images are pages 1 to ${pageCount} of one dream journal, in the order they were written.`
-    : "One page of a dream journal is attached. It is page 1.";
-  const carry = many
-    ? " A dream that runs off the bottom of one page and continues on the next is ONE dream: join the text and list both page numbers. A page may also start a new dream partway down."
-    : "";
-
+export function ocrMessages() {
   return {
     system:
-      "You transcribe photographed handwritten dream-journal pages and separate them into the dreams they contain. Be literal. Do not interpret, complete, or tidy the writing into something the pages do not say. If a word is unreadable, use [illegible]. Never invent text that is not on a page, and never invent a split — if the pages hold one continuous dream, return one item. Reply with a JSON object matching the schema and nothing else. Confidence is 0–1 for each field.",
-    user: `Schema:\n${OCR_SCHEMA}\n\n${pageList}${carry}\n\n"pages" lists which of those page numbers each dream was written across.\n\nTranscribe the attached ${many ? "pages" : "page"}.`,
+      "You transcribe a photographed handwritten dream-journal page. Be literal. Do not interpret, complete, or tidy the writing into something the page does not say. If a word is unreadable, use [illegible]. Reply with a JSON object matching the schema and nothing else. Confidence is 0–1 for each field.",
+    user: `Schema:\n${OCR_SCHEMA}\n\nTranscribe the attached page.`,
   };
 }
 
@@ -264,10 +226,14 @@ const SPLIT_SCHEMA = `{
  * seams. If it is clearly one continuous dream, return a single item — never
  * invent a split, and never invent text that was not in the log.
  */
-export function splitMessages(body: string) {
+export function splitMessages(body: string, source: "log" | "pages" = "log") {
+  const pageBreak =
+    source === "pages"
+      ? " A page break is not a new dream by itself — the writing often continues mid-sentence onto the next page."
+      : "";
   return {
     system:
-      "You split a dream-journal log into individual dream episodes. Keep the writer's words. Do not interpret, summarise, or add detail. A new dream usually starts at a scene change, a waking, or an explicit marker like 'Dream 2'. If the log is one continuous dream, return a single item. Reply with a JSON object matching the schema and nothing else.",
+      `You split a dream-journal log into individual dream episodes. Keep the writer's words. Do not interpret, summarise, or add detail. A new dream usually starts at a scene change, a waking, or an explicit marker like 'Dream 2'.${pageBreak} If the log is one continuous dream, return a single item. Reply with a JSON object matching the schema and nothing else.`,
     user: `Schema:\n${SPLIT_SCHEMA}\n\nLog:\n${clip(body)}`,
   };
 }

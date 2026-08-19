@@ -1,9 +1,14 @@
 import { describe, expect, it } from "vitest";
 import {
   dreamFromTranscript,
+  joinPageTranscripts,
+  mergePageTranscripts,
+  pagesForParts,
+  parsePageTranscript,
   parseSplitParts,
   parseStackReading,
   parseStoredReading,
+  readingFromPages,
   serialiseReading,
 } from "./fields";
 
@@ -242,17 +247,17 @@ describe("carving a stack into dreams", () => {
   it("drops a page number the stack does not have", () => {
     const dreams = parseStackReading(
       JSON.stringify({ dreams: [{ body: "I was flying.", pages: [1, 7, 0, -2] }] }),
-      3,
+      1,
     );
     expect(dreams[0]?.pages).toEqual([1]);
   });
 
   it("puts page numbers in reading order however they were listed", () => {
     const dreams = parseStackReading(
-      JSON.stringify({ dreams: [{ body: "I was flying.", pages: [3, 1, 1] }] }),
+      JSON.stringify({ dreams: [{ body: "I was flying.", pages: [3, 1, 2] }] }),
       3,
     );
-    expect(dreams[0]?.pages).toEqual([1, 3]);
+    expect(dreams[0]?.pages).toEqual([1, 2, 3]);
   });
 
   it("reads a bare transcript object as a stack holding one dream", () => {
@@ -276,5 +281,113 @@ describe("carving a stack into dreams", () => {
     } catch (error) {
       expect((error as Error).message).not.toContain("cathedral");
     }
+  });
+
+  it("refuses a reading that skipped a page in the stack", () => {
+    expect(() =>
+      parseStackReading(
+        JSON.stringify({
+          dreams: [{ body: "I was flying.", pages: [1], title: "The cathedral" }],
+        }),
+        2,
+      ),
+    ).toThrow(/did not include page 2/);
+  });
+
+  it("accepts a reading that covers every page in the stack", () => {
+    const dreams = parseStackReading(
+      JSON.stringify({
+        dreams: [
+          { body: "I was flying.", pages: [1, 2] },
+          { body: "Then a train.", pages: [3] },
+        ],
+      }),
+      3,
+    );
+    expect(dreams).toHaveLength(2);
+  });
+});
+
+describe("copying pages, then splitting the joined log", () => {
+  it("joins a single page's body as the transcript, even if the model wrapped dreams", () => {
+    const page = parsePageTranscript(
+      JSON.stringify({
+        dreams: [
+          { body: "I was flying over the cathedral.", pages: [1] },
+          { body: "Then a train.", pages: [1] },
+        ],
+      }),
+    );
+    expect(page.body.value).toBe("I was flying over the cathedral.\nThen a train.");
+    expect(page.pages).toEqual([]);
+  });
+
+  it("joins page copies with a newline, skipping blanks", () => {
+    const log = joinPageTranscripts([
+      { ...dreamFromTranscript("I was flying over the cathedral of bees and then", 0.9) },
+      { ...dreamFromTranscript("", null) },
+      { ...dreamFromTranscript("I landed in a train station.", 0.8) },
+    ]);
+    expect(log).toBe("I was flying over the cathedral of bees and then\nI landed in a train station.");
+  });
+
+  it("assigns a dream that runs over a page break to both pages", () => {
+    const pages = [
+      "I was flying over the cathedral of bees and then",
+      "I landed in a train station. Then I woke.",
+    ];
+    const spanned = pagesForParts(pages, [
+      { title: "The cathedral", body: "I was flying over the cathedral of bees and then I landed in a train station.", isFragment: false },
+      { title: null, body: "Then I woke.", isFragment: true },
+    ]);
+    expect(spanned[0]).toEqual([1, 2]);
+    expect(spanned[1]).toEqual([2]);
+  });
+
+  it("does not invent a page for a part it cannot place", () => {
+    const spanned = pagesForParts(
+      ["I was flying over the cathedral of bees."],
+      [{ title: null, body: "a completely unrelated train journey through the mountains", isFragment: false }],
+    );
+    expect(spanned[0]).toEqual([]);
+  });
+
+  it("keeps the night date and files photographs against the dream they were copied from", () => {
+    const pages = [
+      readOne({
+        date: "17 August 2026",
+        body: "I was flying over the cathedral of bees and then",
+        tags: ["flying"],
+        lucidity: 3,
+      }),
+      readOne({ body: "I landed in a train station. Then a scrap.", tags: ["train"] }),
+    ];
+    const dreams = readingFromPages(pages, [
+      {
+        title: "The cathedral",
+        body: "I was flying over the cathedral of bees and then I landed in a train station.",
+        isFragment: false,
+      },
+      { title: null, body: "Then a scrap.", isFragment: true },
+    ]);
+    expect(dreams).toHaveLength(2);
+    expect(dreams[0]?.date.value).toBe("2026-08-17");
+    expect(dreams[0]?.title.value).toBe("The cathedral");
+    expect(dreams[0]?.pages).toEqual([1, 2]);
+    expect(dreams[0]?.tags.value).toEqual(["flying", "train"]);
+    expect(dreams[0]?.lucidity.value).toBe(3);
+    expect(dreams[1]?.isFragment).toBe(true);
+    expect(dreams[1]?.pages).toEqual([2]);
+  });
+
+  it("merges the stack into one dream when there is nothing to split", () => {
+    const merged = mergePageTranscripts([
+      readOne({ date: "17 August 2026", body: "I was flying.", tags: ["flying"] }),
+      readOne({ body: "Then a train.", tags: ["train"] }),
+    ]);
+    expect(merged.body.value).toBe("I was flying.\nThen a train.");
+    expect(merged.pages).toEqual([1, 2]);
+    expect(merged.date.value).toBe("2026-08-17");
+    expect(merged.tags.value).toEqual(["flying", "train"]);
   });
 });
