@@ -4,6 +4,7 @@
  * Requires: npm run dev:up
  */
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { randomUUID } from "node:crypto";
 import { readFile } from "node:fs/promises";
 import path from "node:path";
 import { eq, sql } from "drizzle-orm";
@@ -19,13 +20,18 @@ import { __clearKeyStore, putKeys } from "@/lib/auth/key-store";
 import type { UserKeys } from "@/lib/crypto/envelope";
 import { env } from "@/lib/env";
 import {
+  countInbox,
   createImageAttachment,
+  discardStack,
   getAttachment,
+  getStack,
+  listStacks,
   readAttachmentBlob,
-  saveTranscript,
+  saveReading,
+  stackKeyOf,
 } from "./attachments";
 import { confirmAsDreams, splitToFields } from "./confirm";
-import { fieldsFromTranscript, parseExtractedFields } from "./fields";
+import { dreamFromTranscript, parseStackReading } from "./fields";
 import { prepareImage } from "./image";
 
 const EMAIL = "dreamer@example.com";
@@ -41,9 +47,10 @@ async function wipeAll() {
   );
 }
 
-async function tinyJpeg(): Promise<Buffer> {
+/** `shade` varies the bytes so two pages of one stack are not deduplicated. */
+async function tinyJpeg(shade = 30): Promise<Buffer> {
   return sharp({
-    create: { width: 12, height: 12, channels: 3, background: { r: 30, g: 20, b: 50 } },
+    create: { width: 12, height: 12, channels: 3, background: { r: shade, g: 20, b: 50 } },
   })
     .jpeg()
     .toBuffer();
@@ -74,7 +81,7 @@ afterEach(() => {
 describe("encrypted attachments", () => {
   it("round-trips a photograph and keeps the plaintext off disk", async () => {
     const prepared = await prepareImage(await tinyJpeg());
-    const { id } = await createImageAttachment(userId, keys, prepared);
+    const { id } = await createImageAttachment(userId, keys, prepared, null);
 
     const blob = await readAttachmentBlob(userId, keys, id);
     expect(blob?.bytes.equals(prepared.bytes)).toBe(true);
@@ -87,12 +94,12 @@ describe("encrypted attachments", () => {
 
   it("stores an OCR transcript encrypted, bound to the row", async () => {
     const prepared = await prepareImage(await tinyJpeg());
-    const { id } = await createImageAttachment(userId, keys, prepared);
-    await saveTranscript(userId, keys, id, fieldsFromTranscript(`page: ${CANARY}`, 0.81));
+    const { id } = await createImageAttachment(userId, keys, prepared, null);
+    await saveReading(userId, keys, id, [dreamFromTranscript(`page: ${CANARY}`, 0.81)]);
 
     const record = await getAttachment(userId, keys, id);
-    expect(record?.fields.body.value).toBe(`page: ${CANARY}`);
-    expect(record?.fields.body.confidence).toBeCloseTo(0.81);
+    expect(record?.dreams[0]?.body.value).toBe(`page: ${CANARY}`);
+    expect(record?.dreams[0]?.body.confidence).toBeCloseTo(0.81);
 
     const [row] = await db.select().from(attachments).where(eq(attachments.id, id));
     expect(Buffer.from(row!.transcriptEnc!).toString("utf8")).not.toContain(CANARY);
@@ -101,8 +108,8 @@ describe("encrypted attachments", () => {
 
   it("queues only the attachment id, never the transcript", async () => {
     const prepared = await prepareImage(await tinyJpeg());
-    const { id } = await createImageAttachment(userId, keys, prepared);
-    await saveTranscript(userId, keys, id, fieldsFromTranscript(`page: ${CANARY}`, null));
+    const { id } = await createImageAttachment(userId, keys, prepared, null);
+    await saveReading(userId, keys, id, [dreamFromTranscript(`page: ${CANARY}`, null)]);
     await enqueueAttachmentJob(userId, id, "ocr_attachment");
 
     const [job] = await db.select().from(jobs);
@@ -113,7 +120,7 @@ describe("encrypted attachments", () => {
 });
 
 describe("confirming a capture", () => {
-  it("writes separate drafts when a log is split", async () => {
+  it("writes separate entries when a log is split", async () => {
     const ids = await confirmAsDreams(userId, keys, {
       parts: [
         splitToFields({ title: "Flying", body: `over ${CANARY}`, isFragment: false }, "2026-08-17", 0),
@@ -121,23 +128,108 @@ describe("confirming a capture", () => {
       ],
       source: "ocr",
       attachmentIds: [],
-      isDraft: true,
+      // A reviewed capture is a finished entry: the screen has just asked for
+      // the night, the title, the text, the lucidity and the tags. `isDraft`
+      // is for 3am capture mode, which deliberately asks nothing.
+      isDraft: false,
     });
     expect(ids).toHaveLength(2);
 
     const rows = await db.select().from(dreams).where(eq(dreams.userId, userId));
     expect(rows).toHaveLength(2);
-    expect(rows.every((row) => row.isDraft)).toBe(true);
+    expect(rows.every((row) => row.isDraft)).toBe(false);
     expect(rows.filter((row) => row.isFragment)).toHaveLength(1);
     expect(JSON.stringify(rows)).not.toContain(CANARY);
   });
 });
 
-describe("the OCR worker", () => {
-  it("decrypts the page, calls the adapter, and stores encrypted fields", async () => {
-    const prepared = await prepareImage(await tinyJpeg());
-    const { id } = await createImageAttachment(userId, keys, prepared);
+describe("stacks", () => {
+  async function photographStack(count: number): Promise<{ stackId: string; ids: string[] }> {
+    const stackId = randomUUID();
+    const ids: string[] = [];
+    for (let i = 0; i < count; i++) {
+      const prepared = await prepareImage(await tinyJpeg(60 + i));
+      const created = await createImageAttachment(userId, keys, prepared, stackId);
+      ids.push(created.id);
+    }
+    return { stackId, ids };
+  }
 
+  it("groups the pages of one upload into a single thing to review", async () => {
+    const { stackId, ids } = await photographStack(3);
+    await createImageAttachment(userId, keys, await prepareImage(await tinyJpeg(99)), randomUUID());
+
+    const stacks = await listStacks(userId, keys);
+    expect(stacks).toHaveLength(2);
+    expect(await countInbox(userId)).toBe(2);
+
+    const stack = await getStack(userId, keys, stackId);
+    expect(stack?.pages.map((page) => page.id)).toEqual(ids);
+    expect(stack?.leadId).toBe(ids[0]);
+  });
+
+  /*
+   * The two ids are different values and were briefly used interchangeably.
+   * A stack of one hides that -- its key and its lead are the same row -- so
+   * the assertion is made against a stack of three.
+   */
+  it("is addressed by its own key, not by its lead page", async () => {
+    const { stackId, ids } = await photographStack(3);
+    expect(stackId).not.toBe(ids[0]);
+    expect(await getStack(userId, keys, stackId)).not.toBeNull();
+    expect(await getStack(userId, keys, ids[0]!)).toBeNull();
+    expect(await stackKeyOf(userId, ids[2]!)).toBe(stackId);
+  });
+
+  it("counts pages photographed but not yet sent as unsent", async () => {
+    const { stackId, ids } = await photographStack(2);
+
+    let stack = await getStack(userId, keys, stackId);
+    expect(stack?.sent).toBe(false);
+    expect(stack?.status).toBe("pending");
+
+    await enqueueAttachmentJob(userId, ids[0]!, "ocr_attachment");
+    stack = await getStack(userId, keys, stackId);
+    expect(stack?.sent).toBe(true);
+  });
+
+  it("discards every page of a stack, blobs and all", async () => {
+    const { stackId, ids } = await photographStack(3);
+    const rows = await db.select().from(attachments).where(eq(attachments.userId, userId));
+    const paths = rows.map((row) => path.join(env().UPLOAD_DIR, row.storageKey));
+
+    expect(await discardStack(userId, stackId)).toBe(3);
+    expect(await listStacks(userId, keys)).toHaveLength(0);
+    expect(await getAttachment(userId, keys, ids[0]!)).toBeNull();
+    for (const file of paths) {
+      await expect(readFile(file)).rejects.toThrow();
+    }
+  });
+});
+
+describe("the OCR worker", () => {
+  /*
+   * The store owns whatever it is handed: `dropKeys` wipes the buffers, and
+   * `__clearKeyStore` in `afterEach` therefore zeroes the suite's own `keys`
+   * if they go in directly. The next test then encrypts under a zero key and
+   * fails to decrypt anything written before it, several tests away from the
+   * cause. A copy goes in instead.
+   */
+  function lendKeysToWorker(): void {
+    putKeys(
+      "worker",
+      userId,
+      {
+        field: Buffer.from(keys.field),
+        blob: Buffer.from(keys.blob),
+        index: Buffer.from(keys.index),
+        vector: Buffer.from(keys.vector),
+      },
+      60_000,
+    );
+  }
+
+  async function assignVisionModel(): Promise<void> {
     await saveAiConfig(userId, keys, {
       providers: [
         {
@@ -153,7 +245,13 @@ describe("the OCR worker", () => {
         ocr: { providerId: "ollama", model: "llama3.2-vision" },
       },
     });
-    putKeys("worker", userId, keys, 60_000);
+    lendKeysToWorker();
+  }
+
+  it("decrypts the page, calls the adapter, and stores an encrypted reading", async () => {
+    const prepared = await prepareImage(await tinyJpeg());
+    const { id } = await createImageAttachment(userId, keys, prepared, null);
+    await assignVisionModel();
 
     const fetchImpl = vi.fn(async (url: string | URL | Request, init?: RequestInit) => {
       expect(String(url)).toContain("/api/chat");
@@ -164,12 +262,18 @@ describe("the OCR worker", () => {
         JSON.stringify({
           message: {
             content: JSON.stringify({
-              date: "2026-08-17",
-              title: "The cathedral",
-              body: `I dreamt of ${CANARY}`,
-              bodyConfidence: 0.77,
-              tags: [],
-              lucidity: null,
+              dreams: [
+                {
+                  pages: [1],
+                  date: "2026-08-17",
+                  title: "The cathedral",
+                  body: `I dreamt of ${CANARY}`,
+                  bodyConfidence: 0.77,
+                  tags: [],
+                  lucidity: null,
+                  isFragment: false,
+                },
+              ],
             }),
           },
         }),
@@ -183,8 +287,8 @@ describe("the OCR worker", () => {
 
     const stored = await getAttachment(userId, keys, id);
     expect(stored?.status).toBe("succeeded");
-    expect(stored?.fields.body.value).toContain(CANARY);
-    expect(stored?.fields.body.confidence).toBeCloseTo(0.77);
+    expect(stored?.dreams[0]?.body.value).toContain(CANARY);
+    expect(stored?.dreams[0]?.body.confidence).toBeCloseTo(0.77);
 
     const [row] = await db.select().from(attachments).where(eq(attachments.id, id));
     expect(Buffer.from(row!.transcriptEnc!).toString("utf8")).not.toContain(CANARY);
@@ -193,10 +297,136 @@ describe("the OCR worker", () => {
     expect(job?.status).toBe("succeeded");
     expect(job?.lastError).toBeNull();
   });
+
+  /*
+   * The assertion the whole flow exists for. Three pages holding two dreams --
+   * one of them running across a page break -- come back as two entries from
+   * ONE model call, with the photographs filed against the entry each belongs
+   * to. Doing this a page at a time could not answer either question, and left
+   * both to the writer as a tick-box join and a second model pass.
+   */
+  it("reads a whole stack in one call and carves it into separate dreams", async () => {
+    const stackId = randomUUID();
+    const ids: string[] = [];
+    for (const shade of [10, 20, 30]) {
+      const prepared = await prepareImage(await tinyJpeg(shade));
+      const created = await createImageAttachment(userId, keys, prepared, stackId);
+      ids.push(created.id);
+    }
+    await assignVisionModel();
+
+    const calls: number[] = [];
+    const fetchImpl = vi.fn(async (_url: string | URL | Request, init?: RequestInit) => {
+      const body = JSON.parse(String(init?.body));
+      const user = body.messages.find((message: { role: string }) => message.role === "user");
+      calls.push(user.images?.length ?? 0);
+      expect(user.content).toMatch(/pages 1 to 3/);
+      return new Response(
+        JSON.stringify({
+          message: {
+            content: JSON.stringify({
+              dreams: [
+                {
+                  pages: [1, 2],
+                  date: "2026-08-17",
+                  title: "The cathedral",
+                  body: `I dreamt of ${CANARY}, and it went on`,
+                  bodyConfidence: 0.8,
+                  tags: ["flying"],
+                  lucidity: 3,
+                  isFragment: false,
+                },
+                {
+                  pages: [3],
+                  date: "",
+                  title: "",
+                  body: "Then a train.",
+                  bodyConfidence: 0.6,
+                  tags: [],
+                  lucidity: null,
+                  isFragment: true,
+                },
+              ],
+            }),
+          },
+        }),
+        { headers: { "content-type": "application/json" } },
+      );
+    });
+    vi.stubGlobal("fetch", fetchImpl);
+
+    await enqueueAttachmentJob(userId, ids[0]!, "ocr_attachment");
+    expect(await processNextJob()).toBe("done");
+
+    // One call, carrying every page.
+    expect(calls).toEqual([3]);
+
+    const stack = await getStack(userId, keys, stackId);
+    expect(stack?.leadId).toBe(ids[0]);
+    expect(stack?.pages.map((page) => page.id)).toEqual(ids);
+    expect(stack?.dreams).toHaveLength(2);
+    expect(stack?.dreams[0]?.pages).toEqual([1, 2]);
+    expect(stack?.dreams[1]?.pages).toEqual([3]);
+    expect(stack?.dreams[1]?.isFragment).toBe(true);
+
+    // Every page moved with the lead, so the inbox shows one thing to review.
+    const stacks = await listStacks(userId, keys);
+    expect(stacks).toHaveLength(1);
+    expect(stacks[0]?.status).toBe("succeeded");
+
+    const rows = await db.select().from(attachments).where(eq(attachments.userId, userId));
+    expect(rows.every((row) => row.status === "succeeded")).toBe(true);
+    for (const row of rows) {
+      if (row.transcriptEnc) {
+        expect(Buffer.from(row.transcriptEnc).toString("utf8")).not.toContain(CANARY);
+      }
+    }
+  });
+
+  it("files each photograph with the dream it was read off", async () => {
+    const stackId = randomUUID();
+    const ids: string[] = [];
+    for (const shade of [40, 50]) {
+      const prepared = await prepareImage(await tinyJpeg(shade));
+      const created = await createImageAttachment(userId, keys, prepared, stackId);
+      ids.push(created.id);
+    }
+
+    const dreamIds = await confirmAsDreams(userId, keys, {
+      parts: [
+        {
+          nightDate: "2026-08-17",
+          title: "Flying",
+          body: `over ${CANARY}`,
+          lucidity: 0,
+          tags: [],
+          isFragment: false,
+          attachmentIds: [ids[0]!],
+        },
+        {
+          nightDate: "2026-08-17",
+          title: "Train",
+          body: "then a train",
+          lucidity: 0,
+          tags: [],
+          isFragment: true,
+          attachmentIds: [ids[1]!],
+        },
+      ],
+      source: "ocr",
+      attachmentIds: ids,
+      isDraft: false,
+    });
+
+    const rows = await db.select().from(attachments).where(eq(attachments.userId, userId));
+    const byId = new Map(rows.map((row) => [row.id, row.dreamId]));
+    expect(byId.get(ids[0]!)).toBe(dreamIds[0]);
+    expect(byId.get(ids[1]!)).toBe(dreamIds[1]);
+  });
 });
 
-describe("extracted field parsing used by the worker", () => {
+describe("reading parsing used by the worker", () => {
   it("does not put model chatter in a thrown error", () => {
-    expect(() => parseExtractedFields(`sure, here is ${CANARY}`)).toThrow(/did not return JSON/);
+    expect(() => parseStackReading(`sure, here is ${CANARY}`, 1)).toThrow(/did not return JSON/);
   });
 });

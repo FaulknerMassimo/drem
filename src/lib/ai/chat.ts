@@ -86,11 +86,31 @@ const TIMEOUTS: Partial<Record<ChatRole, number>> = {
   split: SPLIT_TIMEOUT_MS,
 };
 
+/**
+ * What a call may spend, when the role's own ceiling is the wrong shape for it.
+ *
+ * `MAX_TOKENS` and `TIMEOUTS` assume a role costs about the same every time.
+ * One role does not: reading a *stack* of photographed pages puts every page
+ * in the same request and gets every page of handwriting back inside the JSON,
+ * so both halves scale with how many pages were photographed. The caller that
+ * knows the page count passes the budget rather than this module guessing at
+ * it from the message array.
+ */
+export interface ChatBudget {
+  maxTokens?: number;
+  timeoutMs?: number;
+}
+
 export async function completeRole(
   config: AiConfig,
   role: ChatRole,
   messages: ChatMessage[],
-  options: { json?: boolean; jsonSchema?: Record<string, unknown>; images?: ChatImage[] } = {},
+  options: {
+    json?: boolean;
+    jsonSchema?: Record<string, unknown>;
+    images?: ChatImage[];
+    budget?: ChatBudget;
+  } = {},
 ): Promise<{ response: ChatResponse; destination: Destination }> {
   const destination = destinationFor(config, role);
   if (!destination.configured) throw new RoleNotConfiguredError(role);
@@ -99,13 +119,13 @@ export async function completeRole(
   const provider = config.providers.find((candidate) => candidate.id === assignment?.providerId);
   if (!provider || !assignment) throw new RoleNotConfiguredError(role);
 
-  const timeoutMs = TIMEOUTS[role];
+  const timeoutMs = options.budget?.timeoutMs ?? TIMEOUTS[role];
   const response = await providerChat(
     provider,
     {
       model: assignment.model,
       messages,
-      maxTokens: MAX_TOKENS[role],
+      maxTokens: options.budget?.maxTokens ?? MAX_TOKENS[role],
       temperature: TEMPERATURE[role],
       json: options.json,
       jsonSchema: options.jsonSchema,

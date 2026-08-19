@@ -1,5 +1,6 @@
 "use server";
 
+import { randomUUID } from "node:crypto";
 import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
 import { currentSession, type ActiveSession } from "@/lib/auth/session";
@@ -9,7 +10,7 @@ import { destinationFor } from "@/lib/ai/destination";
 import { gateDestination } from "@/lib/ai/gate";
 import { enqueueAttachmentJob } from "@/lib/ai/jobs";
 import { publicModelError } from "@/lib/ai/public-error";
-import { splitMessages } from "@/lib/ai/prompts";
+import { MAX_STACK_PAGES, splitMessages } from "@/lib/ai/prompts";
 import { kickWorker } from "@/lib/ai/worker";
 import { recordAuthEvent } from "@/lib/auth/audit";
 import { getDream } from "@/lib/journal/dreams";
@@ -22,11 +23,11 @@ import {
   MAX_UPLOAD_BATCH,
   createAudioAttachment,
   createImageAttachment,
-  discardAttachment,
-  getAttachment,
-  markAttachmentStatus,
+  discardStack,
+  getStack,
+  markStackStatus,
 } from "./attachments";
-import { confirmAsDreams, importedToFields, splitToFields } from "./confirm";
+import { confirmAsDreams, importedToFields, splitToFields, type ConfirmFields } from "./confirm";
 import type {
   CaptureFormState,
   ImportFormState,
@@ -69,27 +70,28 @@ function resolveNightDate(submitted: string): IsoDate {
 // Uploads
 // ---------------------------------------------------------------------------
 
-/** Stores one prepared photograph and queues its reading. */
+/** Stores one prepared photograph as a page of a stack. Reading is asked for later. */
 async function storePhoto(
   session: ActiveSession,
-  ocrReady: boolean,
+  stackId: string | null,
   file: File,
 ): Promise<{ id: string; duplicate: boolean }> {
   const bytes = Buffer.from(await file.arrayBuffer());
   const prepared = await prepareImage(bytes);
-  const created = await createImageAttachment(session.userId, session.keys, prepared);
-  if (created.duplicate) return created;
-  if (ocrReady) {
-    await enqueueAttachmentJob(session.userId, created.id, "ocr_attachment");
-  } else {
-    await markAttachmentStatus(session.userId, created.id, "skipped");
-  }
-  return created;
+  return createImageAttachment(session.userId, session.keys, prepared, stackId);
 }
 
 function photoError(error: unknown): string {
   return error instanceof Error ? error.message : "That photo could not be stored.";
 }
+
+/** A stack id minted by the form, or a fresh one if this upload brought none. */
+function stackIdFrom(form: FormData): string {
+  const value = text(form, "stackId");
+  return UUID.test(value) ? value : randomUUID();
+}
+
+const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 export async function uploadPhotosAction(
   _previous: CaptureFormState,
@@ -104,22 +106,24 @@ export async function uploadPhotosAction(
     return { error: `Upload at most ${MAX_UPLOAD_BATCH} pages at a time.` };
   }
 
-  const config = await loadAiConfig(session.userId, session.keys);
-  const ocrReady = destinationFor(config, "ocr").configured;
+  /*
+   * The no-JavaScript path, and the only one that knows the whole stack up
+   * front. Pages beyond `MAX_STACK_PAGES` start a new stack rather than being
+   * refused: what the ceiling bounds is one model call, not one night.
+   */
   const ids: string[] = [];
-
+  let stackId = randomUUID();
   try {
-    for (const file of files) {
-      const created = await storePhoto(session, ocrReady, file);
+    for (const [index, file] of files.entries()) {
+      if (index > 0 && index % MAX_STACK_PAGES === 0) stackId = randomUUID();
+      const created = await storePhoto(session, stackId, file);
       ids.push(created.id);
     }
   } catch (error) {
     return { error: photoError(error) };
   }
 
-  kickWorker();
   refreshCapture();
-  if (ids.length === 1) redirect(`/import/review/${ids[0]}`);
   redirect("/import");
 }
 
@@ -130,6 +134,11 @@ export async function uploadPhotosAction(
  * form uploads each page as it is taken and empties the file input for the
  * next one. Keeping each page in its own request also means a long night is
  * not one body large enough to hit `serverActions.bodySizeLimit`.
+ *
+ * Nothing is read here. The pages of one stack go to the model together, and
+ * the stack is not finished until the writer says it is — which is also where
+ * the destination badge is, so a page cannot leave this machine before the
+ * screen has named where it is going.
  */
 export async function uploadPhotoAction(formData: FormData): Promise<PhotoUploadResult> {
   await assertCsrf(formData);
@@ -138,19 +147,67 @@ export async function uploadPhotoAction(formData: FormData): Promise<PhotoUpload
   const file = asFile(formData.get("file"));
   if (!file) return { error: "Choose a photograph first." };
 
-  const config = await loadAiConfig(session.userId, session.keys);
-  const ocrReady = destinationFor(config, "ocr").configured;
-
   let created;
   try {
-    created = await storePhoto(session, ocrReady, file);
+    created = await storePhoto(session, stackIdFrom(formData), file);
   } catch (error) {
     return { error: photoError(error) };
   }
 
-  kickWorker();
   refreshCapture();
   return { id: created.id, duplicate: created.duplicate };
+}
+
+/**
+ * Sends a finished stack to the page-reading model.
+ *
+ * Split out from the upload for two reasons. One model call covers the whole
+ * stack, so the call cannot start until the stack is closed. And this is the
+ * screen that names the destination: uploading used to queue the reading as a
+ * side effect, which sent a photographed page to whatever model Settings held
+ * without ever putting the host in front of the writer.
+ */
+export async function readStackAction(
+  _previous: CaptureFormState,
+  formData: FormData,
+): Promise<CaptureFormState> {
+  await assertCsrf(formData);
+  const session = await requireUnlockedSession();
+
+  const stackId = text(formData, "stackId");
+  const stack = stackId ? await getStack(session.userId, session.keys, stackId) : null;
+  if (!stack) return { error: "Those pages are no longer waiting to be read." };
+
+  const gated = await gateDestination(session, "ocr", formData);
+  if (gated) return gated;
+
+  await enqueueAttachmentJob(session.userId, stack.leadId, "ocr_attachment");
+  kickWorker();
+  refreshCapture();
+  redirect(`/import/review/${stack.id}`);
+}
+
+/**
+ * Files a stack for review without reading it.
+ *
+ * The escape hatch for no page-reading model, or a page no model will manage.
+ * The photographs are kept and the review screen offers an empty form to type
+ * into, which is the same place the writer would end up anyway.
+ */
+export async function skipStackAction(
+  _previous: CaptureFormState,
+  formData: FormData,
+): Promise<CaptureFormState> {
+  await assertCsrf(formData);
+  const session = await requireUnlockedSession();
+
+  const stackId = text(formData, "stackId");
+  const stack = stackId ? await getStack(session.userId, session.keys, stackId) : null;
+  if (!stack) return { error: "Those pages are no longer waiting to be read." };
+
+  await markStackStatus(session.userId, stack.id, "skipped");
+  refreshCapture();
+  redirect(`/import/review/${stack.id}`);
 }
 
 export async function uploadVoiceAction(
@@ -183,11 +240,11 @@ export async function uploadVoiceAction(
   redirect(`/import/review/${created.id}`);
 }
 
-export async function discardAttachmentAction(formData: FormData): Promise<void> {
+export async function discardStackAction(formData: FormData): Promise<void> {
   await assertCsrf(formData);
   const session = await requireUnlockedSession();
-  const id = text(formData, "id");
-  if (id) await discardAttachment(session.userId, id);
+  const stackId = text(formData, "stackId");
+  if (stackId) await discardStack(session.userId, stackId);
   refreshCapture();
   redirect("/import");
 }
@@ -196,6 +253,22 @@ export async function discardAttachmentAction(formData: FormData): Promise<void>
 // Review
 // ---------------------------------------------------------------------------
 
+/**
+ * Writes a reviewed stack to the journal.
+ *
+ * One path for every shape of review, because the screen now has one shape:
+ * a list of entries. A stack the model found three dreams in arrives as three
+ * cards; a voice memo arrives as one; a memo the writer split arrives as
+ * however many the split proposed. There is no longer a separate action for
+ * "confirm one" and "confirm a split", which is what made the split feel like
+ * a second, later decision rather than an edit to what is on screen.
+ *
+ * Saved as real entries, not drafts. `isDraft` means "captured, not yet
+ * written up" — the state 3am capture mode leaves things in, because it
+ * deliberately asks nothing. This screen has just asked for the night, the
+ * title, the text, the lucidity and the tags, so filing the result as
+ * unfinished sent the writer to `/drafts` to declare it finished a second time.
+ */
 export async function confirmReviewAction(
   _previous: ReviewFormState,
   formData: FormData,
@@ -203,35 +276,38 @@ export async function confirmReviewAction(
   await assertCsrf(formData);
   const session = await requireUnlockedSession();
 
-  const attachmentId = text(formData, "id");
-  const attachment = attachmentId
-    ? await getAttachment(session.userId, session.keys, attachmentId)
-    : null;
-  if (!attachment || attachment.dreamId) {
-    return { error: "That upload is no longer waiting for review." };
-  }
+  const stackId = text(formData, "stackId");
+  const stack = stackId ? await getStack(session.userId, session.keys, stackId) : null;
+  if (!stack) return { error: "That upload is no longer waiting for review." };
 
-  const extra = formData
-    .getAll("extra")
-    .filter((value): value is string => typeof value === "string" && value.length > 0);
+  const nightDate = resolveNightDate(text(formData, "nightDate"));
+  const parts = cardsFromForm(formData, nightDate);
+  if (parts.length === 0) return { error: "Write the dream before saving." };
 
-  const source = attachment.kind === "audio" ? "voice" : "ocr";
+  const source = stack.kind === "audio" ? "voice" : "ocr";
   let ids: string[];
   try {
     ids = await confirmAsDreams(session.userId, session.keys, {
-      parts: [fieldsFromForm(formData)],
+      parts,
       source,
-      attachmentIds: [attachmentId, ...extra],
-      isDraft: true,
+      attachmentIds: stack.pages.map((page) => page.id),
+      isDraft: false,
     });
   } catch (error) {
     if (error instanceof z.ZodError) return { error: firstIssue(error) };
-    return { error: "That entry could not be saved." };
+    return { error: "Those entries could not be saved." };
   }
   refreshCapture();
-  redirect(`/dream/${ids[0]}`);
+  redirect(ids.length === 1 ? `/dream/${ids[0]}` : `/night/${nightDate}`);
 }
 
+/**
+ * Carves the entry on screen into several, without leaving the screen.
+ *
+ * Only reachable for a voice memo, where there are no page breaks to read the
+ * seams off and the transcript arrives as one block. A photographed stack is
+ * already separated by the reading, which is one model call instead of two.
+ */
 export async function proposeReviewSplitAction(
   _previous: ReviewFormState,
   formData: FormData,
@@ -242,7 +318,7 @@ export async function proposeReviewSplitAction(
   const gated = await gateDestination(session, "split", formData);
   if (gated) return gated;
 
-  const body = text(formData, "body").trim();
+  const body = text(formData, "body-0").trim();
   if (!body) return { error: "Write or confirm the transcript first, then split it." };
 
   try {
@@ -251,47 +327,6 @@ export async function proposeReviewSplitAction(
   } catch (error) {
     return { error: publicModelError(error, "The split request failed.") };
   }
-}
-
-export async function confirmReviewSplitAction(
-  _previous: ReviewFormState,
-  formData: FormData,
-): Promise<ReviewFormState> {
-  await assertCsrf(formData);
-  const session = await requireUnlockedSession();
-
-  const attachmentId = text(formData, "id");
-  const attachment = attachmentId
-    ? await getAttachment(session.userId, session.keys, attachmentId)
-    : null;
-  if (!attachment || attachment.dreamId) {
-    return { error: "That upload is no longer waiting for review." };
-  }
-
-  const parts = partsFromForm(formData);
-  if (parts.length === 0) return { error: "Nothing to save." };
-
-  const extra = formData
-    .getAll("extra")
-    .filter((value): value is string => typeof value === "string" && value.length > 0);
-  const nightDate = resolveNightDate(text(formData, "nightDate"));
-  const lucidity = Number.parseInt(text(formData, "lucidity") || "0", 10) || 0;
-
-  const source = attachment.kind === "audio" ? "voice" : "ocr";
-  let ids: string[];
-  try {
-    ids = await confirmAsDreams(session.userId, session.keys, {
-      parts: parts.map((part) => splitToFields(part, nightDate, lucidity)),
-      source,
-      attachmentIds: [attachmentId, ...extra],
-      isDraft: true,
-    });
-  } catch (error) {
-    if (error instanceof z.ZodError) return { error: firstIssue(error) };
-    return { error: "Those entries could not be saved." };
-  }
-  refreshCapture();
-  redirect(ids.length === 1 ? `/dream/${ids[0]}` : `/night/${nightDate}`);
 }
 
 // ---------------------------------------------------------------------------
@@ -349,7 +384,9 @@ export async function confirmImportAction(
       parts: parsed.entries.map(importedToFields),
       source: "import",
       attachmentIds: [],
-      isDraft: true,
+      // Same reasoning as the review screen: an imported entry arrives with
+      // its date, text and tags already on it. Nothing is left to write up.
+      isDraft: false,
     });
   } catch (error) {
     if (error instanceof z.ZodError) return { error: firstIssue(error) };
@@ -442,15 +479,37 @@ async function runSplit(session: ActiveSession, body: string): Promise<SplitPart
   return parseSplitParts(response.text);
 }
 
-function fieldsFromForm(form: FormData) {
-  return {
-    nightDate: resolveNightDate(text(form, "nightDate")),
-    title: text(form, "title").trim() || null,
-    body: text(form, "body"),
-    lucidity: Number.parseInt(text(form, "lucidity") || "0", 10) || 0,
-    tags: parseTagInput(text(form, "tags")),
-    isFragment: form.get("isFragment") !== null,
-  };
+/**
+ * The entry cards on the review screen, in the order they are shown.
+ *
+ * `pages-i` carries the attachment ids the model read that entry off, so a
+ * stack holding two dreams files each photograph with the entry it belongs to.
+ * The ids are round-tripped through the form rather than recomputed here: the
+ * writer can have deleted or reordered cards since the reading landed, and the
+ * screen is the only thing that knows what they did.
+ */
+function cardsFromForm(form: FormData, nightDate: IsoDate): ConfirmFields[] {
+  const count = Number.parseInt(text(form, "count") || "0", 10);
+  if (!Number.isFinite(count) || count < 1) return [];
+
+  const cards: ConfirmFields[] = [];
+  for (let i = 0; i < count; i++) {
+    const body = text(form, `body-${i}`);
+    if (!body.trim()) continue;
+    cards.push({
+      nightDate,
+      title: text(form, `title-${i}`).trim() || null,
+      body,
+      lucidity: Number.parseInt(text(form, `lucidity-${i}`) || "0", 10) || 0,
+      tags: parseTagInput(text(form, `tags-${i}`)),
+      isFragment: form.get(`fragment-${i}`) !== null,
+      attachmentIds: text(form, `pages-${i}`)
+        .split(",")
+        .map((id) => id.trim())
+        .filter((id) => UUID.test(id)),
+    });
+  }
+  return cards;
 }
 
 function partsFromForm(form: FormData): SplitPart[] {

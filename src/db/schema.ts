@@ -366,6 +366,25 @@ export const attachments = pgTable(
     /** Null while a photo is still an unreviewed import draft. */
     dreamId: uuid("dream_id").references(() => dreams.id, { onDelete: "cascade" }),
     kind: attachmentKind("kind").notNull(),
+    /**
+     * The pages photographed in one sitting, read as one thing.
+     *
+     * A handwritten night is several pages and often several dreams, and both
+     * facts are only legible from the whole stack: a dream can run across a
+     * page break, and the seam between two dreams can fall mid-page. One model
+     * call over every page of the stack answers both at once, which is why the
+     * grouping has to exist before the reading rather than being reconstructed
+     * from it afterwards.
+     *
+     * Null for anything uploaded before stacks existed, and for voice memos,
+     * which are their own stack of one. `stackOf()` folds both cases to the
+     * row's own id rather than backfilling.
+     *
+     * Deliberately not encrypted. It says that these files arrived together,
+     * which `created_at` and `dream_id` already say in a stolen dump; it says
+     * nothing about what is on them.
+     */
+    stackId: uuid("stack_id"),
 
     mimeType: text("mime_type").notNull(),
     byteSize: integer("byte_size").notNull(),
@@ -386,6 +405,7 @@ export const attachments = pgTable(
     index("attachments_user_idx").on(t.userId),
     index("attachments_dream_idx").on(t.dreamId),
     index("attachments_status_idx").on(t.status),
+    index("attachments_stack_idx").on(t.stackId),
   ],
 );
 

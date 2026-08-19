@@ -48,7 +48,7 @@ import {
   runOcrJob,
   runTranscribeJob,
 } from "@/lib/capture/process";
-import { markAttachmentStatus } from "@/lib/capture/attachments";
+import { markStackStatus, stackKeyOf } from "@/lib/capture/attachments";
 import {
   runEmbedJob,
   runSignScanJob,
@@ -109,15 +109,22 @@ export async function processNextJob(): Promise<DrainResult> {
     await completeJob(job.id);
     return "done";
   } catch (error) {
-    const attachmentId = captureAttachmentId(job);
+    /*
+     * The job is against a stack's lead page, and the whole stack has to move
+     * with it: a follower left at `pending` after the reading gave up shows in
+     * the inbox as a second thing still waiting, for a page that is already on
+     * the review screen the writer is looking at.
+     */
+    const leadId = captureLeadId(job);
+    const stackId = leadId ? await stackKeyOf(job.userId, leadId) : null;
     if (error instanceof SkipError || error instanceof RoleNotConfiguredError) {
       await skipJob(job.id, error.message);
-      if (attachmentId) await markAttachmentStatus(job.userId, attachmentId, "skipped");
+      if (stackId) await markStackStatus(job.userId, stackId, "skipped");
       return "done";
     }
     await failJob(job.id, job.attempts, publicError(error, job.kind));
-    if (attachmentId && job.attempts >= 3) {
-      await markAttachmentStatus(job.userId, attachmentId, "failed");
+    if (stackId && job.attempts >= 3) {
+      await markStackStatus(job.userId, stackId, "failed");
     }
     return "done";
   } finally {
@@ -333,7 +340,8 @@ function clipInsight(text: string): string {
   return trimmed.slice(0, MAX_INSIGHT_CHARS);
 }
 
-function captureAttachmentId(job: JobRecord): string | null {
+/** The lead page a capture job names. Its stack is resolved from it. */
+function captureLeadId(job: JobRecord): string | null {
   if (job.kind !== "ocr_attachment" && job.kind !== "transcribe_attachment") return null;
   try {
     return parseAttachmentPayload(job.payload).attachmentId;

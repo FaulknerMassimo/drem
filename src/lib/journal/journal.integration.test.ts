@@ -30,8 +30,8 @@ import { createInitialAccount } from "@/lib/auth/accounts";
 import { saveAiConfig } from "@/lib/ai/config";
 import { emptyRoles } from "@/lib/ai/schema";
 import { saveInsight } from "@/lib/ai/insights";
-import { createImageAttachment, saveTranscript } from "@/lib/capture/attachments";
-import { fieldsFromTranscript } from "@/lib/capture/fields";
+import { createImageAttachment, saveReading } from "@/lib/capture/attachments";
+import { dreamFromTranscript } from "@/lib/capture/fields";
 import { prepareImage } from "@/lib/capture/image";
 import {
   captureDream,
@@ -602,8 +602,8 @@ describe("what a stolen database actually contains", () => {
       .jpeg()
       .toBuffer();
     const prepared = await prepareImage(jpeg);
-    const uploaded = await createImageAttachment(userId, keys, prepared);
-    await saveTranscript(userId, keys, uploaded.id, fieldsFromTranscript(`ocr of ${CANARY}`, 0.8));
+    const uploaded = await createImageAttachment(userId, keys, prepared, null);
+    await saveReading(userId, keys, uploaded.id, [dreamFromTranscript(`ocr of ${CANARY}`, 0.8)]);
 
     const stored = await everyStoredValue();
     // The single most important assertion in this codebase, over phase 2's

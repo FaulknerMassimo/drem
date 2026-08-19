@@ -33,7 +33,7 @@ otherwise.
 | Embeddings | `embeddinggemma:300m` (768-dim) |
 | Delivery | Phased; each phase ends runnable |
 
-Four deviations from the original plan, all deliberate:
+Five deviations from the original plan, all deliberate:
 
 - **Next 16, not 15.** Next 15 was superseded during the build; 16 is the same
   App Router architecture.
@@ -46,6 +46,16 @@ Four deviations from the original plan, all deliberate:
   makes every unwritten square a dead end. `/night/2026-08-17` shows the day's
   entries *and* offers to start one, which is what clicking an empty square is
   actually for.
+- **A photographed night is read as a stack, in one model call.** The original
+  shape was one OCR call per page, then a tick-box join of the pages belonging
+  to one dream, then a second model pass to split the joined text back apart.
+  That is the writer doing the reading's job twice, with a slow local model
+  queued behind each pass — and neither question it asks ("does this dream
+  carry on over the page", "does this page start a new one") can be answered
+  from a single page anyway. One call over the whole stack answers both while
+  it transcribes, and halves the output tokens: the split's answer was the
+  entire log written out a second time. `MAX_STACK_PAGES` is what one call can
+  carry; a longer night is a second stack, not a second flow.
 - **Entries are indexed automatically only when the embedding model is local.**
   Search is useless if the index lags the journal, but embedding sends the entry
   somewhere, and the rule everywhere else is that nothing leaves the machine
@@ -89,7 +99,7 @@ current one's tests pass.
       queue, and a visible badge naming where a request is about to go before
       any dream leaves the machine.
 - [x] **4 — Capture.** Encrypted attachments, photo OCR with side-by-side review
-      (image left, extracted fields right, per-field confidence, nothing saved
+      (pages left, entries right, per-field confidence, nothing saved
       unconfirmed), bulk multi-page import, voice memo → faster-whisper,
       JSON/Markdown/CSV import, and AI splitting of a log that contains several
       dreams into separate entries.

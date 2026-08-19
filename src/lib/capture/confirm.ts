@@ -21,6 +21,14 @@ export interface ConfirmFields {
   lucidity: number;
   tags: string[];
   isFragment: boolean;
+  /**
+   * The pages this entry was read off, filed with it.
+   *
+   * One stack of photographs can hold several dreams, and the photograph of
+   * the second one belongs to the second entry. Anything no part claims falls
+   * to the first, which is where a single-entry review leaves everything.
+   */
+  attachmentIds?: string[];
 }
 
 function asInput(fields: ConfirmFields, isDraft: boolean): DreamInput {
@@ -67,6 +75,16 @@ export async function confirmAsDreams(
     ids.push(id);
   }
 
+  /*
+   * Per-part first, so a page the model attributed to the second dream is
+   * filed against the second entry. `attachToDream` only claims rows that are
+   * still unattached, so the sweep afterwards cannot steal one back: whatever
+   * no part asked for lands on the first entry.
+   */
+  for (let i = 0; i < options.parts.length; i++) {
+    const claimed = options.parts[i]!.attachmentIds ?? [];
+    if (ids[i] && claimed.length > 0) await attachToDream(userId, ids[i]!, claimed);
+  }
   if (ids[0] && options.attachmentIds.length > 0) {
     await attachToDream(userId, ids[0], options.attachmentIds);
   }

@@ -7,9 +7,9 @@
 import { z } from "zod";
 import { isIsoDate } from "@/lib/journal/dates";
 import { parseJsonObject } from "@/lib/ai/json";
-import type { ExtractedFields, FieldConfidence, SplitPart } from "./types";
+import type { ExtractedFields, FieldConfidence, ReadDream, SplitPart } from "./types";
 
-export type { ExtractedFields, FieldConfidence, SplitPart };
+export type { ExtractedFields, FieldConfidence, ReadDream, SplitPart };
 
 const MAX_TITLE_LENGTH = 200;
 const MAX_BODY_LENGTH = 50_000;
@@ -45,8 +45,11 @@ function nestedConfidence(record: Record<string, unknown>, key: string, flatKey:
   return asConfidence(record[flatKey]);
 }
 
-const ocrSchema = z
+const dreamSchema = z
   .object({
+    pages: z.unknown().optional(),
+    isFragment: z.unknown().optional(),
+    is_fragment: z.unknown().optional(),
     date: z.unknown().optional(),
     dateConfidence: confidence.optional(),
     title: z.unknown().optional(),
@@ -60,6 +63,10 @@ const ocrSchema = z
     text: z.unknown().optional(),
   })
   .passthrough();
+
+const readingSchema = z.object({
+  dreams: z.array(z.unknown()).min(1).max(20),
+});
 
 const MONTHS = [
   "january", "february", "march", "april", "may", "june",
@@ -137,20 +144,24 @@ function hasTranscriptKey(value: unknown): boolean {
   return TRANSCRIPT_KEYS.some((key) => key in (value as Record<string, unknown>));
 }
 
-export function parseExtractedFields(text: string): ExtractedFields {
-  const reply = parseJsonObject(text);
-  /*
-   * Thrown rather than returned empty so the job fails, backs off and retries,
-   * and -- if the model keeps answering its own way -- says so on the review
-   * screen. Returning blanks instead hands the writer an empty form and no
-   * reason for it, which is indistinguishable from a page the model could not
-   * read. The reply itself is never quoted: it is dream-derived, and this
-   * message is persisted on the job.
-   */
-  if (!hasTranscriptKey(reply)) {
-    throw new Error("The model's reply had none of the fields a page transcript needs.");
-  }
-  const parsed = ocrSchema.parse(reply);
+/** The wrapper counts too: `{ dreams: [...] }` is the shape actually asked for. */
+function hasReadingKey(value: unknown): boolean {
+  if (value === null || typeof value !== "object") return false;
+  if ("dreams" in (value as Record<string, unknown>)) return true;
+  return hasTranscriptKey(value);
+}
+
+/**
+ * One dream out of a reading, from whatever shape the model used for it.
+ *
+ * `pageCount` is the size of the stack that was actually sent. Any page number
+ * outside it is dropped, never clamped: the same rule the dream-sign scan
+ * holds to, and for the same reason -- a page filed against the wrong dream is
+ * a mistake nothing downstream can detect, and the photograph strip on the
+ * review screen would show it next to text it has nothing to do with.
+ */
+function readDreamFrom(reply: unknown, pageCount: number): ReadDream {
+  const parsed = dreamSchema.parse(reply);
   const record = parsed as Record<string, unknown>;
 
   const dateRaw = stringOrNull(nestedValue(record, "date"));
@@ -164,6 +175,7 @@ export function parseExtractedFields(text: string): ExtractedFields {
 
   const tags = stringList(nestedValue(record, "tags"));
   const lucidity = intOrNull(nestedValue(record, "lucidity"), 0, 5);
+  const clipped = clip(body, MAX_BODY_LENGTH);
 
   return {
     date: { value: date, confidence: nestedConfidence(record, "date", "dateConfidence") },
@@ -172,7 +184,7 @@ export function parseExtractedFields(text: string): ExtractedFields {
       confidence: nestedConfidence(record, "title", "titleConfidence"),
     },
     body: {
-      value: clip(body, MAX_BODY_LENGTH),
+      value: clipped,
       confidence: nestedConfidence(record, "body", "bodyConfidence"),
     },
     tags: {
@@ -183,42 +195,131 @@ export function parseExtractedFields(text: string): ExtractedFields {
       value: lucidity,
       confidence: nestedConfidence(record, "lucidity", "lucidityConfidence"),
     },
-    raw: clip(body, MAX_BODY_LENGTH),
+    raw: clipped,
+    isFragment: Boolean(record.isFragment ?? record.is_fragment),
+    pages: pageList(record.pages, pageCount),
   };
 }
 
-export function fieldsFromTranscript(text: string, confidence: number | null): ExtractedFields {
+/**
+ * What one model call made of a stack of pages: its separate dreams.
+ *
+ * A bare transcript object -- no `dreams` array, just the fields -- is read as
+ * a stack holding one dream rather than rejected. That is what a model does
+ * when it decides the schema's wrapper is noise, and it is a correct answer to
+ * a one-page stack written the wrong way round; refusing it would fail a
+ * reading that is entirely usable.
+ */
+export function parseStackReading(text: string, pageCount: number): ReadDream[] {
+  const reply = parseJsonObject(text);
+  /*
+   * Thrown rather than returned empty so the job fails, backs off and retries,
+   * and -- if the model keeps answering its own way -- says so on the review
+   * screen. Returning blanks instead hands the writer an empty form and no
+   * reason for it, which is indistinguishable from a page the model could not
+   * read. The reply itself is never quoted: it is dream-derived, and this
+   * message is persisted on the job.
+   */
+  if (!hasReadingKey(reply)) {
+    throw new Error("The model's reply had none of the fields a page transcript needs.");
+  }
+
+  const record = reply as Record<string, unknown>;
+  if (!Array.isArray(record.dreams)) return [readDreamFrom(reply, pageCount)];
+
+  const dreams: ReadDream[] = [];
+  for (const item of readingSchema.parse(record).dreams) {
+    if (!hasTranscriptKey(item)) continue;
+    const dream = readDreamFrom(item, pageCount);
+    // An item with no text is not a dream the pages hold; it is the model
+    // padding the array out to the shape of the schema.
+    if (dream.body.value) dreams.push(dream);
+  }
+  if (dreams.length === 0) {
+    throw new Error("The model returned no dream text for those pages.");
+  }
+  return dreams;
+}
+
+/** A speech transcript: one dream, no page structure to speak of. */
+export function dreamFromTranscript(text: string, confidence: number | null): ReadDream {
   const body = clip(text, MAX_BODY_LENGTH);
   return {
-    ...emptyFields(),
+    ...emptyDream(),
     body: { value: body, confidence },
     raw: body,
   };
 }
 
-export function serialiseFields(fields: ExtractedFields): string {
-  return JSON.stringify(fields);
+export function emptyDream(): ReadDream {
+  return { ...emptyFields(), isFragment: false, pages: [] };
 }
 
-export function parseStoredFields(text: string): ExtractedFields {
+export function serialiseReading(dreams: ReadDream[]): string {
+  return JSON.stringify({ dreams });
+}
+
+/**
+ * A stored reading, including ones written before a stack was the unit.
+ *
+ * Three shapes have been persisted into `transcript_enc`: the current
+ * `{ dreams: [...] }`, a single `ExtractedFields` object from when a reading
+ * was one page, and bare text from before that. All three still have to open,
+ * because the rows are encrypted under a key only the owner has and there is
+ * no migration that could rewrite them.
+ */
+export function parseStoredReading(text: string): ReadDream[] {
   try {
-    const parsed = JSON.parse(text) as Partial<ExtractedFields>;
-    if (parsed && typeof parsed === "object" && parsed.body && typeof parsed.body === "object") {
-      return {
-        ...emptyFields(),
-        ...parsed,
-        date: parsed.date ?? emptyFields().date,
-        title: parsed.title ?? emptyFields().title,
-        body: parsed.body,
-        tags: parsed.tags ?? emptyFields().tags,
-        lucidity: parsed.lucidity ?? emptyFields().lucidity,
-        raw: typeof parsed.raw === "string" ? parsed.raw : parsed.body.value,
-      };
+    const parsed = JSON.parse(text) as Record<string, unknown>;
+    if (parsed && typeof parsed === "object") {
+      if (Array.isArray(parsed.dreams)) {
+        const dreams = parsed.dreams
+          .filter((item): item is Record<string, unknown> => Boolean(item) && typeof item === "object")
+          .map((item) => storedDream(item));
+        if (dreams.length > 0) return dreams;
+      }
+      if (parsed.body && typeof parsed.body === "object") return [storedDream(parsed)];
     }
   } catch {
     // A stored transcript from an older shape (plain text) still has to show.
   }
-  return fieldsFromTranscript(text, null);
+  return [dreamFromTranscript(text, null)];
+}
+
+function storedDream(parsed: Record<string, unknown>): ReadDream {
+  const base = emptyDream();
+  const fields = parsed as Partial<ReadDream>;
+  const body = fields.body ?? base.body;
+  return {
+    ...base,
+    ...fields,
+    date: fields.date ?? base.date,
+    title: fields.title ?? base.title,
+    body,
+    tags: fields.tags ?? base.tags,
+    lucidity: fields.lucidity ?? base.lucidity,
+    raw: typeof fields.raw === "string" ? fields.raw : body.value,
+    isFragment: Boolean(fields.isFragment),
+    pages: Array.isArray(fields.pages) ? fields.pages : [],
+  };
+}
+
+/**
+ * Page numbers the stack actually has, de-duplicated and in reading order.
+ *
+ * A model that answers `[2, 1]`, or `[1, 1]`, means the same thing as `[1, 2]`
+ * and `[1]`; a model that answers `[7]` for a three-page stack does not mean
+ * anything, and that entry is left with no pages rather than a guessed one.
+ */
+function pageList(value: unknown, pageCount: number): number[] {
+  const raw = typeof value === "number" ? [value] : Array.isArray(value) ? value : [];
+  const seen = new Set<number>();
+  for (const item of raw) {
+    const page = typeof item === "number" ? item : Number(item);
+    if (!Number.isInteger(page) || page < 1 || page > pageCount) continue;
+    seen.add(page);
+  }
+  return [...seen].sort((a, b) => a - b);
 }
 
 const splitPartSchema = z.object({

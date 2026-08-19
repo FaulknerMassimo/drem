@@ -105,7 +105,7 @@ src/lib/security/   headers, csrf, rate-limit, tokens
 src/lib/auth/       accounts, session, key-store, pending, one-shot, actions
 src/lib/journal/    nights, dreams, tags, stats + pure: dates, heatmap, streaks
 src/lib/ai/         providers, encrypted config, prompts, insights, job worker
-src/lib/capture/    encrypted attachments, OCR, whisper, import parsers, split
+src/lib/capture/    encrypted attachments, stack reading, whisper, import, split
 src/lib/semantic/   embeddings, meaning-based search, dream signs + pure:
                     vectors, correlation, text, signs-parse
 src/db/schema.ts    all 15 tables, with the reasoning in comments
@@ -118,13 +118,15 @@ src/app/(capture)/  the 3am screen, deliberately outside the app chrome
 `heatmap`, `streaks`, `words` and `validation` are pure and have unit suites;
 `nights`, `dreams`, `tags` and `stats` touch the database and are covered by
 `journal.integration.test.ts`. `src/lib/capture/` follows the same split:
-`fields`, `import-parse` and `image` are pure; attachments and the OCR worker
-are covered by `capture.integration.test.ts`. `src/lib/semantic/` is the same
-again: `vectors`, `correlation`, `text` and `signs-parse` are pure and have unit
-suites; `embeddings`, `search`, `signs` and the job bodies in `process.ts` are
-covered by `semantic.integration.test.ts`. `labels.ts` is duplicated from the schema enums
+`fields`, `import-parse` and `image` are pure; attachments and the stack
+reading worker are covered by `capture.integration.test.ts`.
+`src/lib/semantic/` is the same again: `vectors`, `correlation`, `text` and
+`signs-parse` are pure and have unit suites; `embeddings`, `search`, `signs`
+and the job bodies in `process.ts` are covered by
+`semantic.integration.test.ts`. `labels.ts` is duplicated from the schema enums
 on purpose, so client components do not pull Drizzle into the browser bundle —
-`validation.ts` and `signs-parse.ts` hold compile-time guards against the two drifting.
+`validation.ts` and `signs-parse.ts` hold compile-time guards against the two
+drifting.
 
 Auth is hand-rolled rather than NextAuth because the session must hold an
 unwrapped data key in memory, which no off-the-shelf adapter models.
@@ -174,7 +176,31 @@ them.
 - **A scan's entry indices are validated against the window that was sent.**
   The reply numbers entries from 1; an index outside the window is dropped, not
   clamped. Clamping files a real dream sign against an unrelated entry, and
-  nothing downstream can tell that it is wrong.
+  nothing downstream can tell that it is wrong. A stack reading's `pages`
+  indices are the same rule (`pageList()` in `capture/fields.ts`): a page
+  number the stack does not have is dropped, because clamping files a
+  photograph against a dream it has nothing to do with.
+- **A photographed night is read as a stack, not a page at a time.** One model
+  call carries every page of the stack and answers with the *dreams*, because
+  "does this dream carry on over the page" and "does this page start a new one"
+  are questions about the stack. Reading per page could answer neither, and
+  pushed both onto the writer as a tick-box join plus a second split pass. The
+  cost is that the budget scales with the stack — see `readingBudget()` in
+  `capture/process.ts` — and that `MAX_STACK_PAGES` bounds what one call may
+  carry. Raising it without raising the budget reproduces the failure the
+  split role was already caught by: a transcript cut off mid-sentence at the
+  same place every time.
+- **A reviewed capture is not a draft.** `isDraft` means "captured, not yet
+  written up", which is what 3am capture mode leaves behind because it
+  deliberately asks nothing. The review screen has just asked for everything,
+  so filing its result as a draft sends the writer to `/drafts` to declare it
+  finished a second time.
+- **Never hand the key store the keys a test is still using.** `dropKeys` wipes
+  the buffers it was given, so `__clearKeyStore()` in an `afterEach` zeroes the
+  suite's own `keys` in place. Every later test then encrypts under a zero key
+  and fails to decrypt something written before it, several tests away from the
+  cause. Put a copy in — see `lendKeysToWorker()` in
+  `capture.integration.test.ts`.
 - **`<li>` cannot nest.** `DreamRow` *is* the `<li>`; wrapping it in another one
   to hang a similarity score off it is invalid HTML and a hydration error. Pass
   `aside` instead, or use `ScoredDreamList`.

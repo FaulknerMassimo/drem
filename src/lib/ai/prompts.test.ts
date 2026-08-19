@@ -1,6 +1,8 @@
 import { describe, expect, it } from "vitest";
 import {
   extractionMessages,
+  MAX_STACK_PAGES,
+  OCR_RESPONSE_SCHEMA,
   lucidityMessages,
   ocrMessages,
   PROMPT_VERSIONS,
@@ -25,7 +27,9 @@ describe("insight prompts", () => {
     expect(PROMPT_VERSIONS.lucidity).toBe("lucidity.v1");
     expect(PROMPT_VERSIONS.symbolic).toBe("symbolic.v1");
     expect(PROMPT_VERSIONS.split).toBe("split.v1");
-    expect(PROMPT_VERSIONS.ocr).toBe("ocr.v1");
+    // v2 is the stack reading: one call over every page, answering with the
+    // dreams rather than with one page's fields.
+    expect(PROMPT_VERSIONS.ocr).toBe("ocr.v2");
   });
 
   it("puts the dream in the user message, not the system prompt", () => {
@@ -60,9 +64,57 @@ describe("insight prompts", () => {
   });
 
   it("keeps the photographed page out of the OCR system prompt", () => {
-    const prompt = ocrMessages();
+    const prompt = ocrMessages(1);
     expect(prompt.system).toMatch(/literal/i);
     expect(prompt.system).toMatch(/JSON/i);
+  });
+
+  it("tells the reading how many pages it was handed, and that they are ordered", () => {
+    const prompt = ocrMessages(3);
+    expect(prompt.user).toContain("3 attached images");
+    expect(prompt.user).toMatch(/pages 1 to 3/);
+    expect(prompt.user).toMatch(/in the order they were written/);
+  });
+
+  /*
+   * The two questions the whole flow turns on. Reading page by page could
+   * answer neither, which is what pushed the join and the split back onto the
+   * writer as two manual passes over the same text.
+   */
+  it("asks a multi-page reading to carry a dream over the page break", () => {
+    const prompt = ocrMessages(2);
+    expect(prompt.user).toMatch(/ONE dream/);
+    expect(prompt.user).toMatch(/list both page numbers/);
+    expect(prompt.user).toMatch(/start a new dream partway down/);
+  });
+
+  it("does not talk about page breaks when there is only one page", () => {
+    const prompt = ocrMessages(1);
+    expect(prompt.user).not.toMatch(/ONE dream/);
+    expect(prompt.user).toContain("It is page 1.");
+  });
+
+  it("refuses to invent a split in the system prompt", () => {
+    expect(ocrMessages(4).system).toMatch(/never invent a split/i);
+  });
+
+  /*
+   * The grammar, not the prose, is what a model that answers its own way is
+   * caught by -- a well-formed object with none of these keys in it used to
+   * parse into a blank form with nothing to explain it.
+   */
+  it("holds the reading to a required dreams array", () => {
+    expect(OCR_RESPONSE_SCHEMA.required).toEqual(["dreams"]);
+    const dreams = (OCR_RESPONSE_SCHEMA.properties as Record<string, { items: { required: string[] } }>)
+      .dreams!;
+    expect(dreams.items.required).toContain("pages");
+    expect(dreams.items.required).toContain("body");
+    expect(dreams.items.required).toContain("isFragment");
+  });
+
+  it("caps a stack at what one call can carry", () => {
+    expect(MAX_STACK_PAGES).toBeGreaterThan(1);
+    expect(MAX_STACK_PAGES).toBeLessThanOrEqual(8);
   });
 
   it("puts the log in the split user message, not the system prompt", () => {

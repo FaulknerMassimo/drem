@@ -369,6 +369,36 @@ export async function attachmentJobProgress(
   };
 }
 
+/**
+ * The attachments that have a capture job still open.
+ *
+ * A photographed page is stored at `pending` and stays there until the writer
+ * sends its stack to be read, so the attachment row alone cannot tell "queued"
+ * from "not sent yet". The queue is the only thing that knows.
+ */
+export async function openCaptureAttachmentIds(userId: string): Promise<Set<string>> {
+  const rows = await db
+    .select({ payload: jobs.payload })
+    .from(jobs)
+    .where(
+      and(
+        eq(jobs.userId, userId),
+        inArray(jobs.kind, ["ocr_attachment", "transcribe_attachment"]),
+        inArray(jobs.status, OPEN),
+      ),
+    );
+
+  const ids = new Set<string>();
+  for (const row of rows) {
+    try {
+      ids.add(parseAttachmentPayload(row.payload).attachmentId);
+    } catch {
+      // A payload this cannot read is not an attachment waiting on anything.
+    }
+  }
+  return ids;
+}
+
 export async function openJobCount(userId: string, kind: JobKind): Promise<number> {
   const [row] = await db
     .select({ total: count() })

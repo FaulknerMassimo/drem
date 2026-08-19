@@ -22,13 +22,10 @@ import {
 } from "@/lib/crypto/aead";
 import type { UserKeys } from "@/lib/crypto/envelope";
 import { env } from "@/lib/env";
+import { openCaptureAttachmentIds } from "@/lib/ai/jobs";
 import { imageForModel, type ImageMime, type PreparedImage } from "./image";
-import type { ExtractedFields } from "./fields";
-import {
-  emptyFields,
-  parseStoredFields,
-  serialiseFields,
-} from "./fields";
+import type { ReadDream } from "./fields";
+import { parseStoredReading, serialiseReading } from "./fields";
 
 export const MAX_AUDIO_BYTES = 25 * 1024 * 1024;
 export const MAX_UPLOAD_BATCH = 20;
@@ -52,13 +49,45 @@ export type AttachmentStatus = import("./types").AttachmentStatus;
 export interface AttachmentRecord {
   id: string;
   dreamId: string | null;
+  stackId: string;
   kind: AttachmentKind;
   mimeType: string;
   byteSize: number;
   status: AttachmentStatus;
   confidence: number | null;
-  fields: ExtractedFields;
+  /** Empty until this row is a stack's lead and its reading has landed. */
+  dreams: ReadDream[];
   createdAt: Date;
+}
+
+/**
+ * The pages of one stack and the dreams read off them.
+ *
+ * `pages` is in photograph order, which is the order they were sent to the
+ * model and therefore what the dreams' page numbers index into.
+ *
+ * `id` is the stack's own key — the `stack_id` the upload form minted, or the
+ * row's own id for anything predating stacks. `leadId` is the page that
+ * carries the reading and the job. They are usually different values and are
+ * not interchangeable: addressing a stack by its lead worked only for a stack
+ * of one, which is exactly the case that hides the bug.
+ */
+export interface StackRecord {
+  id: string;
+  leadId: string;
+  kind: AttachmentKind;
+  status: AttachmentStatus;
+  /**
+   * Whether this stack has been handed to a model yet.
+   *
+   * A page is stored at `pending` and stays there until the writer sends the
+   * stack, so the status alone cannot tell "waiting for the worker" from
+   * "still being photographed" — and calling the second one "reading…" is a
+   * screen that lies about where the dream is.
+   */
+  sent: boolean;
+  pages: AttachmentRecord[];
+  dreams: ReadDream[];
 }
 
 export interface AttachmentBlob {
@@ -91,14 +120,27 @@ function decodeRow(keys: UserKeys, row: typeof attachments.$inferSelect): Attach
   return {
     id: row.id,
     dreamId: row.dreamId,
+    stackId: stackOf(row),
     kind: row.kind,
     mimeType: row.mimeType,
     byteSize: row.byteSize,
     status: row.status,
     confidence: row.confidence,
-    fields: transcript ? parseStoredFields(transcript) : emptyFields(),
+    dreams: transcript ? parseStoredReading(transcript) : [],
     createdAt: row.createdAt,
   };
+}
+
+/**
+ * Which stack a row belongs to.
+ *
+ * A row uploaded before stacks existed, or a voice memo, has no `stack_id` and
+ * is a stack of one under its own id. Folding here rather than backfilling
+ * keeps the column meaning exactly one thing -- "these arrived together" --
+ * instead of also meaning "and these did not, but something had to go here".
+ */
+function stackOf(row: { id: string; stackId: string | null }): string {
+  return row.stackId ?? row.id;
 }
 
 export function isAudioMime(value: string): boolean {
@@ -109,11 +151,13 @@ export async function createImageAttachment(
   userId: string,
   keys: UserKeys,
   prepared: PreparedImage,
+  stackId: string | null,
 ): Promise<{ id: string; duplicate: boolean }> {
   return createBlobAttachment(userId, keys, {
     kind: "image",
     mimeType: prepared.mimeType,
     bytes: prepared.bytes,
+    stackId,
   });
 }
 
@@ -135,7 +179,7 @@ export async function createAudioAttachment(
 async function createBlobAttachment(
   userId: string,
   keys: UserKeys,
-  input: { kind: AttachmentKind; mimeType: string; bytes: Buffer },
+  input: { kind: AttachmentKind; mimeType: string; bytes: Buffer; stackId?: string | null },
 ): Promise<{ id: string; duplicate: boolean }> {
   const sha256 = digestOf(input.bytes);
 
@@ -160,6 +204,7 @@ async function createBlobAttachment(
     id,
     userId,
     dreamId: null,
+    stackId: input.stackId ?? null,
     kind: input.kind,
     mimeType: input.mimeType,
     byteSize: input.bytes.length,
@@ -232,8 +277,9 @@ export async function getAttachment(
  * Everything waiting for review, oldest first.
  *
  * The order is the order the pages were photographed, which is the order they
- * have to be read in: a dream spread over three pages is joined into one entry
- * on the review screen, and page three arriving first would fold it backwards.
+ * have to be read in: the model is handed the stack as numbered pages and
+ * answers with those numbers, so page three arriving first would file the
+ * dreams against the wrong photographs.
  */
 export async function listInbox(
   userId: string,
@@ -247,12 +293,86 @@ export async function listInbox(
   return rows.map((row) => decodeRow(keys, row));
 }
 
+/**
+ * The inbox as stacks rather than as loose files.
+ *
+ * A stack's status is its lead page's, because the lead is what carries the
+ * job: one reading covers every page, so a stack is never half read. Its
+ * dreams are the lead's too, for the same reason.
+ */
+export async function listStacks(userId: string, keys: UserKeys): Promise<StackRecord[]> {
+  const [pages, queued] = await Promise.all([
+    listInbox(userId, keys),
+    openCaptureAttachmentIds(userId),
+  ]);
+  return groupStacks(pages, queued);
+}
+
+export async function getStack(
+  userId: string,
+  keys: UserKeys,
+  stackId: string,
+): Promise<StackRecord | null> {
+  const stacks = await listStacks(userId, keys);
+  return stacks.find((stack) => stack.id === stackId) ?? null;
+}
+
+function groupStacks(pages: AttachmentRecord[], queued: Set<string>): StackRecord[] {
+  const byStack = new Map<string, AttachmentRecord[]>();
+  for (const page of pages) {
+    const group = byStack.get(page.stackId);
+    if (group) group.push(page);
+    else byStack.set(page.stackId, [page]);
+  }
+
+  const stacks: StackRecord[] = [];
+  for (const [id, group] of byStack) {
+    const lead = group[0]!;
+    stacks.push({
+      id,
+      leadId: lead.id,
+      kind: lead.kind,
+      status: lead.status,
+      sent: lead.status !== "pending" || queued.has(lead.id),
+      pages: group,
+      dreams: lead.dreams,
+    });
+  }
+  return stacks;
+}
+
+/** The stack a page belongs to, for callers that only hold a page's id. */
+export async function stackKeyOf(userId: string, attachmentId: string): Promise<string | null> {
+  const [row] = await db
+    .select({ id: attachments.id, stackId: attachments.stackId })
+    .from(attachments)
+    .where(and(eq(attachments.id, attachmentId), eq(attachments.userId, userId)))
+    .limit(1);
+  return row ? stackOf(row) : null;
+}
+
+/** The pages of a stack in photograph order, for the model call. */
+export async function stackPageIds(userId: string, stackId: string): Promise<string[]> {
+  const rows = await db
+    .select({ id: attachments.id, stackId: attachments.stackId })
+    .from(attachments)
+    .where(and(eq(attachments.userId, userId), isNull(attachments.dreamId)))
+    .orderBy(asc(attachments.createdAt));
+  return rows.filter((row) => stackOf(row) === stackId).map((row) => row.id);
+}
+
+/**
+ * How many things are waiting for review, counted as stacks.
+ *
+ * A four-page night is one thing to review, not four. Counting rows made the
+ * badge in the header read like a backlog every time a page turned.
+ */
 export async function countInbox(userId: string): Promise<number> {
   const rows = await db
-    .select({ id: attachments.id })
+    .select({ id: attachments.id, stackId: attachments.stackId })
     .from(attachments)
     .where(and(eq(attachments.userId, userId), isNull(attachments.dreamId)));
-  return rows.length;
+  return new Set(rows.map((row) => stackOf(row))).size;
 }
 
 export async function listAttachmentsForDream(
@@ -268,22 +388,33 @@ export async function listAttachmentsForDream(
   return rows.map((row) => decodeRow(keys, row));
 }
 
-export async function saveTranscript(
+/**
+ * Writes a stack's reading onto its lead page.
+ *
+ * The reading belongs to the stack, and the stack has no row of its own, so it
+ * lands on the row the stack is addressed by. The other pages carry no
+ * transcript: splitting one reading across the rows it came from would mean
+ * re-deriving which words came off which page, which is exactly the guesswork
+ * reading the pages together exists to avoid.
+ *
+ * Confidence on the row stays the *body* confidence of the first dream, which
+ * is what the inbox shows; the per-dream figures live inside the reading.
+ */
+export async function saveReading(
   userId: string,
   keys: UserKeys,
-  attachmentId: string,
-  fields: ExtractedFields,
+  leadId: string,
+  dreams: ReadDream[],
   status: AttachmentStatus = "succeeded",
 ): Promise<void> {
-  const confidence = fields.body.confidence;
   await db
     .update(attachments)
     .set({
-      transcriptEnc: encryptOptional(keys.field, serialiseFields(fields), transcriptAad(attachmentId)),
+      transcriptEnc: encryptOptional(keys.field, serialiseReading(dreams), transcriptAad(leadId)),
       status,
-      confidence,
+      confidence: dreams[0]?.body.confidence ?? null,
     })
-    .where(and(eq(attachments.id, attachmentId), eq(attachments.userId, userId)));
+    .where(and(eq(attachments.id, leadId), eq(attachments.userId, userId)));
 }
 
 export async function markAttachmentStatus(
@@ -295,6 +426,27 @@ export async function markAttachmentStatus(
     .update(attachments)
     .set({ status })
     .where(and(eq(attachments.id, attachmentId), eq(attachments.userId, userId)));
+}
+
+/**
+ * Moves every page of a stack to one status.
+ *
+ * The lead's status is what the UI reads, but the followers' has to track it
+ * too: a page left at `pending` after its stack was read shows up as a stack
+ * of one still waiting, which is a review screen for a page that has already
+ * been reviewed.
+ */
+export async function markStackStatus(
+  userId: string,
+  stackId: string,
+  status: AttachmentStatus,
+): Promise<void> {
+  const ids = await stackPageIds(userId, stackId);
+  if (ids.length === 0) return;
+  await db
+    .update(attachments)
+    .set({ status })
+    .where(and(eq(attachments.userId, userId), inArray(attachments.id, ids)));
 }
 
 export async function attachToDream(
@@ -323,6 +475,16 @@ export async function discardAttachment(userId: string, attachmentId: string): P
     .where(and(eq(attachments.id, attachmentId), eq(attachments.userId, userId)));
   await unlinkQuiet(absolutePath(row.storageKey));
   return true;
+}
+
+/** Discards every page of a stack, blobs and all. */
+export async function discardStack(userId: string, stackId: string): Promise<number> {
+  const ids = await stackPageIds(userId, stackId);
+  let removed = 0;
+  for (const id of ids) {
+    if (await discardAttachment(userId, id)) removed++;
+  }
+  return removed;
 }
 
 /**
