@@ -29,6 +29,7 @@ import { confirmAsDreams, importedToFields, splitToFields } from "./confirm";
 import type {
   CaptureFormState,
   ImportFormState,
+  PhotoUploadResult,
   ReviewFormState,
   SplitFormState,
 } from "./form-state";
@@ -67,6 +68,28 @@ function resolveNightDate(submitted: string): IsoDate {
 // Uploads
 // ---------------------------------------------------------------------------
 
+/** Stores one prepared photograph and queues its reading. */
+async function storePhoto(
+  session: ActiveSession,
+  ocrReady: boolean,
+  file: File,
+): Promise<{ id: string; duplicate: boolean }> {
+  const bytes = Buffer.from(await file.arrayBuffer());
+  const prepared = await prepareImage(bytes);
+  const created = await createImageAttachment(session.userId, session.keys, prepared);
+  if (created.duplicate) return created;
+  if (ocrReady) {
+    await enqueueAttachmentJob(session.userId, created.id, "ocr_attachment");
+  } else {
+    await markAttachmentStatus(session.userId, created.id, "skipped");
+  }
+  return created;
+}
+
+function photoError(error: unknown): string {
+  return error instanceof Error ? error.message : "That photo could not be stored.";
+}
+
 export async function uploadPhotosAction(
   _previous: CaptureFormState,
   formData: FormData,
@@ -86,25 +109,47 @@ export async function uploadPhotosAction(
 
   try {
     for (const file of files) {
-      const bytes = Buffer.from(await file.arrayBuffer());
-      const prepared = await prepareImage(bytes);
-      const created = await createImageAttachment(session.userId, session.keys, prepared);
+      const created = await storePhoto(session, ocrReady, file);
       ids.push(created.id);
-      if (created.duplicate) continue;
-      if (ocrReady) {
-        await enqueueAttachmentJob(session.userId, created.id, "ocr_attachment");
-      } else {
-        await markAttachmentStatus(session.userId, created.id, "skipped");
-      }
     }
   } catch (error) {
-    return { error: error instanceof Error ? error.message : "That photo could not be stored." };
+    return { error: photoError(error) };
   }
 
   kickWorker();
   refreshCapture();
   if (ids.length === 1) redirect(`/import/review/${ids[0]}`);
   redirect("/import");
+}
+
+/**
+ * Stores a single photograph and returns its id instead of redirecting.
+ *
+ * A phone camera hands back one image per capture and clears nothing, so the
+ * form uploads each page as it is taken and empties the file input for the
+ * next one. Keeping each page in its own request also means a long night is
+ * not one body large enough to hit `serverActions.bodySizeLimit`.
+ */
+export async function uploadPhotoAction(formData: FormData): Promise<PhotoUploadResult> {
+  await assertCsrf(formData);
+  const session = await requireUnlockedSession();
+
+  const file = asFile(formData.get("file"));
+  if (!file) return { error: "Choose a photograph first." };
+
+  const config = await loadAiConfig(session.userId, session.keys);
+  const ocrReady = destinationFor(config, "ocr").configured;
+
+  let created;
+  try {
+    created = await storePhoto(session, ocrReady, file);
+  } catch (error) {
+    return { error: photoError(error) };
+  }
+
+  kickWorker();
+  refreshCapture();
+  return { id: created.id, duplicate: created.duplicate };
 }
 
 export async function uploadVoiceAction(

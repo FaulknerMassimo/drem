@@ -13,6 +13,18 @@ export interface CaptureFormState {
   ids?: string[];
 }
 
+/**
+ * The result of storing a single photograph.
+ *
+ * The photo form uploads page by page rather than as one batch, so it needs a
+ * per-file answer instead of a redirect.
+ */
+export interface PhotoUploadResult {
+  id?: string;
+  duplicate?: boolean;
+  error?: string;
+}
+
 export interface ReviewFormState {
   error?: string;
   saved?: boolean;
