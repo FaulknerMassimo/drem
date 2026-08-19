@@ -26,12 +26,16 @@ export default async function ReviewPage({
     readCsrfToken(),
     attachmentJobProgress(session.userId, attachment.id),
   ]);
-  const extras = inbox.filter((item) => item.id !== attachment.id);
-  const processing = attachment.status === "pending" || attachment.status === "running";
+  /*
+   * Poll while any pending page is still being read, not just this one. The
+   * pages this dream continues onto cannot be joined until their text lands,
+   * and nothing else on the screen would go and fetch it.
+   */
+  const reading = inbox.some((item) => isReading(item.status));
 
   return (
     <div className="space-y-6">
-      <JobRefresh active={processing} />
+      <JobRefresh active={reading} />
       <div>
         <p className="text-sm text-ink-400">
           <a href="/import" className="hover:text-ink-200">
@@ -48,7 +52,7 @@ export default async function ReviewPage({
       </div>
       <ReviewForm
         attachment={attachment}
-        extras={extras}
+        pages={inbox}
         defaultDate={nightDateFor()}
         csrfToken={csrfToken}
         splitDestination={destinations.split}
@@ -56,4 +60,8 @@ export default async function ReviewPage({
       />
     </div>
   );
+}
+
+function isReading(status: string): boolean {
+  return status === "pending" || status === "running";
 }

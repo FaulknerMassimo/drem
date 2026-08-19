@@ -10,7 +10,7 @@ import "server-only";
 import { createHash, randomUUID } from "node:crypto";
 import { mkdir, readFile, unlink, writeFile } from "node:fs/promises";
 import path from "node:path";
-import { and, asc, desc, eq, inArray, isNull } from "drizzle-orm";
+import { and, asc, eq, inArray, isNull } from "drizzle-orm";
 import { db } from "@/db";
 import { attachments, dreams } from "@/db/schema";
 import {
@@ -228,6 +228,13 @@ export async function getAttachment(
   return row ? decodeRow(keys, row) : null;
 }
 
+/**
+ * Everything waiting for review, oldest first.
+ *
+ * The order is the order the pages were photographed, which is the order they
+ * have to be read in: a dream spread over three pages is joined into one entry
+ * on the review screen, and page three arriving first would fold it backwards.
+ */
 export async function listInbox(
   userId: string,
   keys: UserKeys,
@@ -236,7 +243,7 @@ export async function listInbox(
     .select()
     .from(attachments)
     .where(and(eq(attachments.userId, userId), isNull(attachments.dreamId)))
-    .orderBy(desc(attachments.createdAt));
+    .orderBy(asc(attachments.createdAt));
   return rows.map((row) => decodeRow(keys, row));
 }
 

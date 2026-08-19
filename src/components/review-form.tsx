@@ -1,6 +1,6 @@
 "use client";
 
-import { useActionState } from "react";
+import { useActionState, useRef, useState } from "react";
 import { DestinationBadge } from "@/components/destination-badge";
 import { FormError } from "@/components/form-error";
 import { SubmitButton } from "@/components/submit-button";
@@ -11,6 +11,7 @@ import {
   proposeReviewSplitAction,
 } from "@/lib/capture/actions";
 import type { ReviewFormState } from "@/lib/capture/form-state";
+import { addPage, removePage } from "@/lib/capture/pages";
 import type { Destination } from "@/lib/ai/types";
 import type { CaptureProgress, ReviewAttachment } from "@/lib/capture/types";
 import type { SplitPart } from "@/lib/capture/types";
@@ -19,14 +20,15 @@ import { CSRF_FIELD } from "@/lib/security/constants";
 
 export function ReviewForm({
   attachment,
-  extras,
+  pages,
   defaultDate,
   csrfToken,
   splitDestination,
   progress = null,
 }: {
   attachment: ReviewAttachment;
-  extras: ReviewAttachment[];
+  /** Everything waiting for review, in the order it was photographed. */
+  pages: ReviewAttachment[];
   defaultDate: string;
   csrfToken: string;
   splitDestination: Destination;
@@ -44,6 +46,12 @@ export function ReviewForm({
     confirmReviewSplitAction,
     {},
   );
+  /*
+   * Which other pending pages are part of this dream. Held here rather than in
+   * `SingleReview` because a split replaces that whole form, and the pages the
+   * writer joined are the pages the split's entries have to be filed under.
+   */
+  const [picked, setPicked] = useState<string[]>([]);
 
   const fields = attachment.fields;
   const proposal = splitState.splitProposal;
@@ -105,7 +113,7 @@ export function ReviewForm({
           {proposal && proposal.length > 0 ? (
             <SplitConfirm
               attachmentId={attachment.id}
-              extras={extras}
+              picked={picked}
               defaultDate={fields.date.value ?? defaultDate}
               lucidity={fields.lucidity.value ?? 0}
               proposal={proposal}
@@ -116,7 +124,10 @@ export function ReviewForm({
           ) : (
             <SingleReview
               attachment={attachment}
-              extras={extras}
+              pages={pages}
+              picked={picked}
+              onPick={setPicked}
+              processing={processing}
               defaultDate={fields.date.value ?? defaultDate}
               csrfToken={csrfToken}
               splitDestination={splitDestination}
@@ -165,7 +176,10 @@ function MediaPane({ attachment }: { attachment: ReviewAttachment }) {
 
 function SingleReview({
   attachment,
-  extras,
+  pages,
+  picked,
+  onPick,
+  processing,
   defaultDate,
   csrfToken,
   splitDestination,
@@ -175,7 +189,10 @@ function SingleReview({
   splitAction,
 }: {
   attachment: ReviewAttachment;
-  extras: ReviewAttachment[];
+  pages: ReviewAttachment[];
+  picked: string[];
+  onPick: (ids: string[]) => void;
+  processing: boolean;
   defaultDate: string;
   csrfToken: string;
   splitDestination: Destination;
@@ -185,6 +202,36 @@ function SingleReview({
   splitAction: (payload: FormData) => void;
 }) {
   const fields = attachment.fields;
+  const extras = pages.filter((item) => item.id !== attachment.id);
+  const bodyRef = useRef<HTMLTextAreaElement>(null);
+
+  /*
+   * Joining is done to the textarea itself rather than through state: the
+   * transcript arrives late, and a controlled value initialised from a prop
+   * would freeze at whatever the field held when the model was still reading.
+   *
+   * A page goes in ahead of the first page after it whose text is already in
+   * the field -- the page being reviewed counts, since its text is what the
+   * field started as -- so the entry reads in photograph order however the
+   * writer ticks, including from a page in the middle of the dream. Once that
+   * text has been edited it can no longer be found, and the page joins at the
+   * end for the writer to move.
+   */
+  function togglePage(item: ReviewAttachment, joined: boolean): void {
+    const node = bodyRef.current;
+    if (node) {
+      if (joined) {
+        const following = pages
+          .slice(pages.indexOf(item) + 1)
+          .find((other) => other.id === attachment.id || picked.includes(other.id));
+        node.value = addPage(node.value, item.fields.body.value, following?.fields.body.value);
+      } else {
+        node.value = removePage(node.value, item.fields.body.value);
+      }
+    }
+    onPick(joined ? [...picked, item.id] : picked.filter((id) => id !== item.id));
+  }
+
   return (
     <div className="space-y-6">
       <form action={saveAction} className="space-y-4">
@@ -213,6 +260,7 @@ function SingleReview({
           </div>
           <textarea
             id="body"
+            ref={bodyRef}
             name="body"
             rows={14}
             defaultValue={fields.body.value}
@@ -253,21 +301,36 @@ function SingleReview({
         </label>
 
         {extras.length > 0 && (
-          <fieldset className="space-y-2">
-            <legend className="text-sm font-medium text-ink-200">Also attach</legend>
+          <fieldset className="space-y-3 rounded-lg border border-ink-800 p-4">
+            <legend className="px-1 text-sm font-medium text-ink-200">
+              Does this dream carry on?
+            </legend>
             <p className="text-xs text-ink-400">
-              Extra pages of the same dream. Their text is not merged; open
-              each to copy if you need it.
+              {processing
+                ? "Wait for this page to finish reading, then tick the pages it continues onto."
+                : "Tick every page of the same dream and their text joins the entry above, in the order they were photographed. One entry, all the pages filed with it. Leave a page clear if it is a different dream."}
             </p>
             {extras.map((item) => (
-              <label key={item.id} className="flex items-center gap-2 text-sm text-ink-200">
+              <label key={item.id} className="flex items-center gap-3 text-sm text-ink-200">
                 <input
                   type="checkbox"
                   name="extra"
                   value={item.id}
+                  checked={picked.includes(item.id)}
+                  disabled={processing}
+                  onChange={(event) => togglePage(item, event.currentTarget.checked)}
                   className="size-4 accent-lucid-500"
                 />
-                {item.kind === "audio" ? "Recording" : "Page"} {item.id.slice(0, 8)}
+                {item.kind === "image" && (
+                  /* eslint-disable-next-line @next/next/no-img-element */
+                  <img
+                    src={`/api/attachments/${item.id}`}
+                    alt=""
+                    className="h-12 w-12 shrink-0 rounded object-cover bg-ink-950"
+                  />
+                )}
+                <span className="flex-1">{item.kind === "audio" ? "Recording" : "Page"}</span>
+                <PageState item={item} />
               </label>
             ))}
           </fieldset>
@@ -318,7 +381,7 @@ function SingleReview({
 
 function SplitConfirm({
   attachmentId,
-  extras,
+  picked,
   defaultDate,
   lucidity,
   proposal,
@@ -327,7 +390,7 @@ function SplitConfirm({
   action,
 }: {
   attachmentId: string;
-  extras: ReviewAttachment[];
+  picked: string[];
   defaultDate: string;
   lucidity: number;
   proposal: SplitPart[];
@@ -342,8 +405,8 @@ function SplitConfirm({
       <input type="hidden" name="count" value={String(proposal.length)} />
       <input type="hidden" name="nightDate" value={defaultDate} />
       <input type="hidden" name="lucidity" value={String(lucidity)} />
-      {extras.map((item) => (
-        <input key={item.id} type="hidden" name="extra" value={item.id} />
+      {picked.map((id) => (
+        <input key={id} type="hidden" name="extra" value={id} />
       ))}
       <p className="text-sm text-ink-400">
         {proposal.length} {proposal.length === 1 ? "dream" : "dreams"} proposed.
@@ -386,6 +449,17 @@ function SplitConfirm({
       <SubmitButton pendingLabel="Saving…">Save as separate drafts</SubmitButton>
     </form>
   );
+}
+
+/** Whether a pending page has text to contribute yet. */
+function PageState({ item }: { item: ReviewAttachment }) {
+  if (item.status === "pending" || item.status === "running") {
+    return <span className="text-xs text-ink-400">reading…</span>;
+  }
+  if (!item.fields.body.value.trim()) {
+    return <span className="text-xs text-warn-500">no text — files the photo only</span>;
+  }
+  return null;
 }
 
 function Field({

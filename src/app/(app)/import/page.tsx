@@ -29,6 +29,12 @@ export default async function ImportPage() {
         <section className="space-y-3">
           <JobRefresh active={processing} />
           <h2 className="text-lg font-medium">Waiting for review</h2>
+          {inbox.length > 1 && (
+            <p className="text-sm text-ink-400">
+              One dream over several pages? Open its first page — the rest can
+              be joined onto it there, as one entry.
+            </p>
+          )}
           <ul className="space-y-2">
             {inbox.map((item) => (
               <li key={item.id}>

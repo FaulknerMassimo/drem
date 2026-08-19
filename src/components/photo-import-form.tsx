@@ -169,7 +169,7 @@ export function PhotoImportForm({ csrfToken }: { csrfToken: string }) {
             ? "Uploading…"
             : pages.length === 0
               ? "Photos appear here as you add them."
-              : "Pages are waiting for review at the top of this screen."}
+              : "Waiting for review at the top of this screen. Pages of one dream are joined there."}
         </p>
       ) : (
         <SubmitButton pendingLabel="Uploading…">Upload pages</SubmitButton>
