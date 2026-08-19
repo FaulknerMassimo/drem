@@ -7,6 +7,7 @@ import { saveAiSettingsAction, testProviderAction } from "@/lib/ai/actions";
 import type { SettingsFormState, TestFormState } from "@/lib/ai/form-state";
 import { MODEL_ROLE_HINTS, MODEL_ROLE_LABELS, PROVIDER_KIND_HINTS, PROVIDER_KIND_LABELS } from "@/lib/ai/labels";
 import { defaultUrlFor, emptyRoles } from "@/lib/ai/schema";
+import { randomUuid } from "@/lib/random-id";
 import { CSRF_FIELD } from "@/lib/security/constants";
 import { CAPTURE_ROLES, INSIGHT_ROLES, MODEL_ROLES, SEMANTIC_ROLES } from "@/lib/ai/types";
 import type {
@@ -377,7 +378,7 @@ function CsrfInput({ token }: { token: string }) {
 }
 
 function newProvider(kind: ProviderKind): DraftProvider {
-  const id = `${kind}-${crypto.randomUUID().slice(0, 8)}`;
+  const id = `${kind}-${randomUuid().slice(0, 8)}`;
   return {
     id,
     kind,

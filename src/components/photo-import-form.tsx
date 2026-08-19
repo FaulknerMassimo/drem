@@ -7,6 +7,7 @@ import { SubmitButton } from "@/components/submit-button";
 import { uploadPhotoAction, uploadPhotosAction } from "@/lib/capture/actions";
 import type { CaptureFormState, PhotoUploadResult } from "@/lib/capture/form-state";
 import { MAX_STACK_PAGES } from "@/lib/ai/prompts";
+import { randomUuid } from "@/lib/random-id";
 import { CSRF_FIELD } from "@/lib/security/constants";
 
 const ACCEPT = "image/jpeg,image/png,image/webp,image/gif";
@@ -55,7 +56,7 @@ export function PhotoImportForm({ csrfToken }: { csrfToken: string }) {
    * visit mints a fresh one — a stack already at the model can never be added
    * to behind its back.
    */
-  const [stackId] = useState<string>(() => crypto.randomUUID());
+  const [stackId] = useState<string>(randomUuid);
   const [hydrated, setHydrated] = useState(false);
   const router = useRouter();
   const chain = useRef<Promise<void>>(Promise.resolve());
