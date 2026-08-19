@@ -11,7 +11,7 @@ import type { UserKeys } from "@/lib/crypto/envelope";
 import { completeRole, RoleNotConfiguredError } from "@/lib/ai/chat";
 import { loadAiConfig } from "@/lib/ai/config";
 import { OCR_RESPONSE_SCHEMA, ocrMessages } from "@/lib/ai/prompts";
-import { ProviderError } from "@/lib/ai/providers/errors";
+import { publicModelError } from "@/lib/ai/public-error";
 import {
   getAttachment,
   imageBytesForModel,
@@ -92,14 +92,12 @@ export async function runTranscribeJob(
 }
 
 export function publicCaptureError(error: unknown): string {
+  // The generic "No model is assigned for ocr." does not tell the operator
+  // which setting to go and change; every other case is the shared cascade.
   if (error instanceof RoleNotConfiguredError) {
     return "No page-reading model is assigned. Choose one in Settings.";
   }
-  if (error instanceof ProviderError) return error.message;
-  if (error instanceof Error && error.message === "The model did not return JSON.") {
-    return error.message;
-  }
-  return "Processing failed.";
+  return publicModelError(error, "Processing failed.");
 }
 
 function extensionFor(mimeType: string): string {

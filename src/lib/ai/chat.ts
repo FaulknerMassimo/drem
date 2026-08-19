@@ -9,7 +9,12 @@
 import "server-only";
 import { destinationFor } from "./destination";
 import { providerChat } from "./providers";
-import { OCR_TIMEOUT_MS, REPORT_TIMEOUT_MS, SCAN_TIMEOUT_MS } from "./providers/http";
+import {
+  OCR_TIMEOUT_MS,
+  REPORT_TIMEOUT_MS,
+  SCAN_TIMEOUT_MS,
+  SPLIT_TIMEOUT_MS,
+} from "./providers/http";
 import { resolveRoles } from "./schema";
 import type {
   AiConfig,
@@ -73,6 +78,14 @@ const THINKING: Partial<Record<ChatRole, boolean>> = {
   split: false,
 };
 
+/** Roles the default chat budget is too tight for. The rest fall back to it. */
+const TIMEOUTS: Partial<Record<ChatRole, number>> = {
+  signs: SCAN_TIMEOUT_MS,
+  ocr: OCR_TIMEOUT_MS,
+  report: REPORT_TIMEOUT_MS,
+  split: SPLIT_TIMEOUT_MS,
+};
+
 export async function completeRole(
   config: AiConfig,
   role: ChatRole,
@@ -86,14 +99,7 @@ export async function completeRole(
   const provider = config.providers.find((candidate) => candidate.id === assignment?.providerId);
   if (!provider || !assignment) throw new RoleNotConfiguredError(role);
 
-  const timeoutMs =
-    role === "signs"
-      ? SCAN_TIMEOUT_MS
-      : role === "ocr"
-        ? OCR_TIMEOUT_MS
-        : role === "report"
-          ? REPORT_TIMEOUT_MS
-          : undefined;
+  const timeoutMs = TIMEOUTS[role];
   const response = await providerChat(
     provider,
     {

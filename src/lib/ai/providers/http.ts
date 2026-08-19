@@ -22,6 +22,29 @@ export const REPORT_TIMEOUT_MS = 180_000;
  * that polls, the same reasoning that makes the scan ceiling generous.
  */
 export const OCR_TIMEOUT_MS = 300_000;
+/**
+ * Splitting one log into its separate dreams.
+ *
+ * The only role whose answer is its own prompt written out again: every word
+ * of the log has to come back inside the JSON before there is anything to
+ * parse. That makes it the slowest output in the app per character of input,
+ * and it scales with the entry rather than with the size of the answer -- a
+ * night with four dreams in it is four dreams' worth of tokens.
+ *
+ * Measured on the machine this was written for, against a 2,900-character log
+ * of four dreams: 200s on qwen3.5:9b, 155s on qwen3.8:27b -- both of them
+ * writing ~700 tokens at 4-6 tok/s. The old default of 120s could not finish
+ * either one, and cut out at the same place every time, so a night with
+ * several dreams in it never split and the feature looked broken rather than
+ * slow.
+ *
+ * This ceiling is not generous the way the OCR and scan ones are: those are
+ * queued jobs nobody waits on, and a split is a form the writer is sitting in
+ * front of. It buys roughly 5,000 characters of log at these rates. A longer
+ * one still runs out -- but it now says so, naming the host and the budget,
+ * instead of failing anonymously.
+ */
+export const SPLIT_TIMEOUT_MS = 300_000;
 /** A backfill batch of a few dozen entries against a local model. */
 export const EMBED_TIMEOUT_MS = 120_000;
 /**

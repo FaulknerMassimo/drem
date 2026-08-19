@@ -6,10 +6,9 @@ import { headers } from "next/headers";
 import { clientContext, recordAuthEvent } from "@/lib/auth/audit";
 import { currentSession, type ActiveSession } from "@/lib/auth/session";
 import { loadAiConfig } from "@/lib/ai/config";
-import { RoleNotConfiguredError } from "@/lib/ai/chat";
+import { publicModelError } from "@/lib/ai/public-error";
 import { gateDestination } from "@/lib/ai/gate";
 import { enqueueEmbedDreams, enqueueSignScan } from "@/lib/ai/jobs";
-import { ProviderError } from "@/lib/ai/providers/errors";
 import { kickWorker } from "@/lib/ai/worker";
 import { env } from "@/lib/env";
 import { isIsoDate } from "@/lib/journal/dates";
@@ -57,19 +56,6 @@ function refresh(): void {
   revalidatePath("/", "layout");
 }
 
-/**
- * Turns a failed model call into one safe sentence.
- *
- * Provider errors already name only a host and a status, so they pass through;
- * anything else is flattened, because an unrecognised error may well have the
- * query or the entry inside it.
- */
-function publicError(error: unknown, fallback: string): string {
-  if (error instanceof RoleNotConfiguredError) return error.message;
-  if (error instanceof ProviderError) return error.message;
-  return fallback;
-}
-
 // ---------------------------------------------------------------------------
 // Search
 // ---------------------------------------------------------------------------
@@ -109,7 +95,7 @@ export async function searchAction(
     });
     return { query, searched: true, hits: result.hits };
   } catch (error) {
-    return { query, error: publicError(error, "The search could not be run.") };
+    return { query, error: publicModelError(error, "The search could not be run.") };
   }
 }
 

@@ -8,6 +8,7 @@ import { loadAiConfig } from "@/lib/ai/config";
 import { destinationFor } from "@/lib/ai/destination";
 import { gateDestination } from "@/lib/ai/gate";
 import { enqueueAttachmentJob } from "@/lib/ai/jobs";
+import { publicModelError } from "@/lib/ai/public-error";
 import { splitMessages } from "@/lib/ai/prompts";
 import { kickWorker } from "@/lib/ai/worker";
 import { recordAuthEvent } from "@/lib/auth/audit";
@@ -248,7 +249,7 @@ export async function proposeReviewSplitAction(
     const proposal = await runSplit(session, body);
     return { splitProposal: proposal };
   } catch (error) {
-    return { error: publicSplitError(error) };
+    return { error: publicModelError(error, "The split request failed.") };
   }
 }
 
@@ -380,7 +381,7 @@ export async function proposeDreamSplitAction(
     const proposal = await runSplit(session, dream.body);
     return { proposal };
   } catch (error) {
-    return { error: publicSplitError(error) };
+    return { error: publicModelError(error, "The split request failed.") };
   }
 }
 
@@ -468,15 +469,3 @@ function partsFromForm(form: FormData): SplitPart[] {
   return parts;
 }
 
-function publicSplitError(error: unknown): string {
-  if (error && typeof error === "object" && "message" in error) {
-    const message = String((error as { message: string }).message);
-    if (message === "The model did not return JSON.") return message;
-    if (message.startsWith("No model is assigned")) return message;
-    if (message.startsWith("Could not reach") || message.startsWith("The provider returned")) {
-      return message;
-    }
-    if (message.startsWith("Timed out")) return message;
-  }
-  return "The split request failed.";
-}

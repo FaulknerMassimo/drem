@@ -12,6 +12,7 @@ import { recordAuthEvent } from "@/lib/auth/audit";
 import type { UserKeys } from "@/lib/crypto/envelope";
 import { getDream, dreamsInRange } from "@/lib/journal/dreams";
 import { completeRole, RoleNotConfiguredError } from "./chat";
+import { publicModelError } from "./public-error";
 import { loadAiConfig } from "./config";
 import {
   latestExtractionsForDreams,
@@ -40,7 +41,6 @@ import {
   reportMessages,
   type DreamPromptInput,
 } from "./prompts";
-import { ProviderError } from "./providers/errors";
 import type { AiConfig, InsightRole } from "./types";
 import {
   CaptureSkipError,
@@ -346,10 +346,5 @@ function publicError(error: unknown, kind: JobRecord["kind"]): string {
   if (kind === "ocr_attachment" || kind === "transcribe_attachment") {
     return publicCaptureError(error);
   }
-  if (error instanceof RoleNotConfiguredError) return error.message;
-  if (error instanceof ProviderError) return error.message;
-  if (error instanceof Error && error.message === "The model did not return JSON.") {
-    return error.message;
-  }
-  return "The model request failed.";
+  return publicModelError(error, "The model request failed.");
 }
