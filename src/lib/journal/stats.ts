@@ -2,8 +2,10 @@ import "server-only";
 import { and, count, eq, gte, lte, max, min, sql } from "drizzle-orm";
 import { db } from "@/db";
 import { dreams, nights } from "@/db/schema";
+import type { AnalyticsDream, AnalyticsNight } from "./analytics";
 import { yearOf, type IsoDate } from "./dates";
 import type { DayActivity } from "./heatmap";
+import type { Technique } from "./labels";
 
 /**
  * The queries behind the heatmap and the streaks.
@@ -70,6 +72,47 @@ export async function activityBetween(
   }
 
   return [...byDate.values()].sort((a, b) => a.date.localeCompare(b.date));
+}
+
+/**
+ * The rows the analytics page is built from.
+ *
+ * Structural columns only — dates, the technique array, the flags and the 1–5
+ * ratings. No `Enc` column is read and no key is touched, so the whole page
+ * renders without a single dream being decrypted. Worth keeping that way: it is
+ * the screen most likely to be left open on a second monitor.
+ */
+export async function analyticsRows(
+  userId: string,
+  from: IsoDate,
+  to: IsoDate,
+): Promise<{ nights: AnalyticsNight[]; dreams: AnalyticsDream[] }> {
+  const [nightRows, dreamRows] = await Promise.all([
+    db
+      .select({ date: nights.date, techniques: nights.techniques })
+      .from(nights)
+      .where(and(eq(nights.userId, userId), gte(nights.date, from), lte(nights.date, to))),
+    db
+      .select({
+        date: dreams.dreamDate,
+        isLucid: dreams.isLucid,
+        vividness: dreams.vividness,
+        control: dreams.control,
+        recallClarity: dreams.recallClarity,
+      })
+      .from(dreams)
+      .where(
+        and(eq(dreams.userId, userId), gte(dreams.dreamDate, from), lte(dreams.dreamDate, to)),
+      ),
+  ]);
+
+  return {
+    nights: nightRows.map((row) => ({
+      date: row.date,
+      techniques: (row.techniques ?? []) as Technique[],
+    })),
+    dreams: dreamRows,
+  };
 }
 
 export function activityForYear(userId: string, year: number): Promise<DayActivity[]> {

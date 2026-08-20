@@ -72,8 +72,14 @@ export default async function AppLayout({
               <Link href="/signs" className="hover:text-ink-200">
                 Signs
               </Link>
+              <Link href="/stats" className="hover:text-ink-200">
+                Stats
+              </Link>
               <Link href="/reports" className="hover:text-ink-200">
                 Reports
+              </Link>
+              <Link href="/backup" className="hover:text-ink-200">
+                Backup
               </Link>
               <Link href="/settings" className="hover:text-ink-200">
                 Settings

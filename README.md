@@ -5,7 +5,7 @@ tracking with a GitHub-style activity heatmap, AI dream-sign detection across th
 whole archive, handwritten-page OCR, and semantic search — with the journal
 encrypted at rest throughout.
 
-Status: **Phase 5 — Semantic layer.** See [Roadmap](#roadmap).
+Status: **Phase 6 — Analytics and polish.** See [Roadmap](#roadmap).
 
 ## Security model
 
@@ -153,11 +153,13 @@ dream content, the password, or `MASTER_KEY` appears anywhere in it.
 - [x] **4** — Photo OCR with review, bulk import, voice memos, AI split of multi-dream logs
 - [x] **5** — Embeddings with backfill, semantic search, "dreams like this", dream-sign
       detection with lucidity correlation
-- [ ] **6** — Statistics, period reports, PWA offline capture, export/import
+- [x] **6** — Statistics (lucid rate over time, technique effectiveness, vividness trends),
+      installable PWA with offline capture, passphrase-sealed export/import, backup docs
 
 ## Backups
 
-Two things, kept apart:
+Three things, kept apart. **[docs/BACKUP.md](docs/BACKUP.md) is the procedure**;
+this is the short version.
 
 ```bash
 docker compose exec db pg_dump -U drem drem > drem-$(date +%F).sql
@@ -166,4 +168,34 @@ docker run --rm -v drem_uploads:/data -v "$PWD":/out alpine \
 ```
 
 ...and `MASTER_KEY`, somewhere else entirely. A backup of the database without
-it restores nothing.
+it restores nothing — it is half the key material, not a configuration value.
+
+Both files above are still encrypted, so they are safe to store anywhere. What
+they are not is *portable*: they restore this instance, with this `MASTER_KEY`,
+at this migration state.
+
+For a copy that outlives the instance, the **Backup** screen writes a single
+passphrase-sealed archive of every night and dream, which opens with that
+passphrase alone and restores into any drem install. That independence is
+bought by dropping to **one factor** — anyone holding the file can attack it
+offline — so it takes a real passphrase and belongs somewhere separate again.
+Restoring merges: it never deletes, never overwrites a night you have since
+rewritten, and skips entries already present, so running it twice is a no-op.
+
+## Installing it as an app
+
+The manifest and service worker make drem installable, which matters for one
+screen: capture. A home-screen icon and a long-press shortcut are the difference
+between catching a dream at 4am and losing it to finding a browser tab.
+
+Once installed, capture works with no connection. A save that cannot reach the
+server is held in browser storage and sent when one is available, with the count
+kept on screen so nothing waits invisibly. Note the trade-off, which is the one
+place in the app plaintext touches disk outside the database: a queued capture
+sits unencrypted in `localStorage` until it is sent. It is capped, it is
+deleted the moment the server confirms it, and the alternative was losing the
+dream — see the reasoning in `src/lib/capture/offline.ts`.
+
+**Both need HTTPS.** Service workers require a secure context, so on a plain
+`http://` LAN origin the app still works but does not install and has no offline
+capture. `localhost` is the exception browsers make, and is enough to try it.

@@ -1,6 +1,6 @@
 import "server-only";
 import { randomUUID } from "node:crypto";
-import { and, eq } from "drizzle-orm";
+import { and, asc, eq, gte, lte } from "drizzle-orm";
 import { db, type Executor } from "@/db";
 import { dreams, nights } from "@/db/schema";
 import { decryptStringOptional, encryptOptional, type Aad } from "@/lib/crypto/aead";
@@ -70,6 +70,26 @@ export async function getNight(
     .where(and(eq(nights.userId, userId), eq(nights.date, date)))
     .limit(1);
   return row ? decodeNight(keys, row) : null;
+}
+
+/**
+ * Every night in a closed date range, oldest first.
+ *
+ * Decrypts the notes, so it is for the backup export rather than for any list
+ * screen — those read structural columns only.
+ */
+export async function nightsInRange(
+  userId: string,
+  keys: UserKeys,
+  from: IsoDate,
+  to: IsoDate,
+): Promise<NightRecord[]> {
+  const rows = await db
+    .select()
+    .from(nights)
+    .where(and(eq(nights.userId, userId), gte(nights.date, from), lte(nights.date, to)))
+    .orderBy(asc(nights.date));
+  return rows.map((row) => decodeNight(keys, row));
 }
 
 /**

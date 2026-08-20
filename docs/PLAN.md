@@ -33,7 +33,7 @@ otherwise.
 | Embeddings | `embeddinggemma:300m` (768-dim) |
 | Delivery | Phased; each phase ends runnable |
 
-Five deviations from the original plan, all deliberate:
+Deviations from the original plan, all deliberate:
 
 - **Next 16, not 15.** Next 15 was superseded during the build; 16 is the same
   App Router architecture.
@@ -67,6 +67,37 @@ Five deviations from the original plan, all deliberate:
   without the destination being on screen first. Splitting on locality keeps
   both: a local model indexes as you write, a remote one has to be asked for on
   the search page, where the badge and the acknowledgement are.
+- **An archive is protected by one factor, and everything else by two.** A
+  backup that still needed `MASTER_KEY` would be destroyed by the accident it
+  exists to insure against, and would add nothing over a `pg_dump`. So the
+  export is sealed by its passphrase alone — the single deliberate weakening in
+  the codebase. It is bounded by running the KDF at full cost, refusing a short
+  passphrase, and saying so on the screen that writes the file.
+- **A restore merges; it never replaces.** The two real restores are "into an
+  empty journal" (where merge and replace are identical) and "I want March
+  back" (where replacing destroys everything written since). The second has no
+  safe destructive version, so it is not offered. Entries are deduplicated on a
+  digest of date and text, which makes a restore repeatable rather than
+  cumulative — the property that lets it be run without a preview step.
+- **The archive carries what was written, not what was derived.** Insights,
+  embeddings and dream signs are rebuilt by re-running the models, and would
+  roughly double the file with data that is stale as soon as a prompt or an
+  embedding model changes.
+- **Statistics divide by nights journalled, not nights recalled.** The
+  dashboard's headline lucid rate answers "when I remembered a night, how often
+  was it lucid"; a technique has to answer "when I did WBTB, did it work", and a
+  WBTB night you remembered nothing from is a night it did not work. Excusing
+  those would flatter every technique in proportion to how badly it wrecked
+  recall. The two numbers therefore disagree, and the page says so.
+- **A bucket with no nights in it has no rate, not a rate of zero.** A month you
+  did not journal is drawn as a gap; putting it on the floor of the chart says
+  you tried and failed, which is a different and untrue statement.
+- **Offline capture keeps plaintext in `localStorage`.** The only place in the
+  app dream text is written unencrypted outside the database. The keys live in
+  the server's memory, so reaching them is exactly what is impossible when
+  offline; the real alternative was losing the dream. Bounded by a cap, by
+  deleting each entry the moment the server confirms it, and by showing the
+  count on screen.
 
 ## Security model
 
@@ -113,9 +144,12 @@ current one's tests pass.
       with per-sign frequency and lucidity correlation against the archive's own
       lucid rate. Verified end to end over HTTP against a live database and a
       local `embeddinggemma`.
-- [ ] **6 — Analytics and polish.** Stats dashboards (lucid rate over time,
-      technique effectiveness, vividness trends), period reports, installable PWA
-      with offline capture, encrypted export/import, backup docs.
+- [x] **6 — Analytics and polish.** Statistics page (lucid rate and recall over
+      time, technique effectiveness against the archive's own baseline, vividness
+      /control/clarity trends), installable PWA with offline capture,
+      passphrase-sealed export and merge-restore, `docs/BACKUP.md`. Period
+      reports already shipped in phase 3. Verified end to end over HTTP against
+      a live database seeded with 400 days of nights.
 
 ## Data model notes
 

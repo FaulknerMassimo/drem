@@ -68,6 +68,29 @@ export function monthOf(date: IsoDate): number {
   return Number(date.slice(5, 7));
 }
 
+/** The `YYYY-MM` a day belongs to. The identity of a monthly bucket. */
+export function monthKey(date: IsoDate): string {
+  return date.slice(0, 7);
+}
+
+export function startOfMonth(date: IsoDate): IsoDate {
+  return `${monthKey(date)}-01`;
+}
+
+/**
+ * Month arithmetic on the first of the month only.
+ *
+ * Deliberately not general: adding a month to the 31st has no single right
+ * answer, and every caller here is stepping bucket boundaries, which are
+ * always the 1st. Anything else should use `addDays`.
+ */
+export function addMonths(date: IsoDate, delta: number): IsoDate {
+  const total = yearOf(date) * 12 + (monthOf(date) - 1) + delta;
+  const year = Math.floor(total / 12);
+  const month = total - year * 12 + 1;
+  return `${String(year).padStart(4, "0")}-${String(month).padStart(2, "0")}-01`;
+}
+
 export function today(now: Date = new Date()): IsoDate {
   return toIsoDate(now);
 }

@@ -49,6 +49,13 @@ write path rather than hand-built rows, and reads the bytes back out in SQL
 instead of shelling out to `pg_dump` — so it runs without Docker access. Add new
 encrypted fields to both.
 
+`backup.integration.test.ts` makes the same assertion over the file the app
+hands to the browser: export a seeded journal, then fail if a word of dream
+content appears in the archive's bytes. **If you add a field to the archive,
+add a canary for it there** — an archive is the copy most likely to be carried
+around on a USB stick, and a field that ends up in it unencrypted leaks further
+than a database column would.
+
 `semantic.integration.test.ts` adds the assertion for the one column that is
 readable only by opt-in: under the default `SEARCH_BACKEND=encrypted`,
 `embeddings.vector` must stay null. A vector is invertible enough to leak the
@@ -100,14 +107,16 @@ streaks — look fine and prove nothing with four hand-typed entries.
 ## Layout
 
 ```
-src/lib/crypto/     aead, kdf, envelope, blind-index, totp, recovery
+src/lib/crypto/     aead, kdf, envelope, blind-index, totp, recovery, archive
 src/lib/security/   headers, csrf, rate-limit, tokens
 src/lib/auth/       accounts, session, key-store, pending, one-shot, actions
-src/lib/journal/    nights, dreams, tags, stats + pure: dates, heatmap, streaks
+src/lib/journal/    nights, dreams, tags, stats + pure: dates, heatmap, streaks,
+                    analytics
 src/lib/ai/         providers, encrypted config, prompts, insights, job worker
 src/lib/capture/    encrypted attachments, stack reading, whisper, import, split
 src/lib/semantic/   embeddings, meaning-based search, dream signs + pure:
                     vectors, correlation, text, signs-parse
+src/lib/backup/     passphrase-sealed export and merge-restore + pure: document
 src/db/schema.ts    all 15 tables, with the reasoning in comments
 src/app/(auth)/     setup, login, TOTP verify
 src/app/(app)/      everything behind a session
@@ -123,7 +132,10 @@ reading worker are covered by `capture.integration.test.ts`.
 `src/lib/semantic/` is the same again: `vectors`, `correlation`, `text` and
 `signs-parse` are pure and have unit suites; `embeddings`, `search`, `signs`
 and the job bodies in `process.ts` are covered by
-`semantic.integration.test.ts`. `labels.ts` is duplicated from the schema enums
+`semantic.integration.test.ts`. `src/lib/backup/` follows it too: `document`
+is pure, and `export`/`restore` are covered by `backup.integration.test.ts`.
+The container they use, `crypto/archive.ts`, is part of the crypto gate and has
+its own unit suite. `labels.ts` is duplicated from the schema enums
 on purpose, so client components do not pull Drizzle into the browser bundle —
 `validation.ts` and `signs-parse.ts` hold compile-time guards against the two
 drifting.
@@ -207,6 +219,40 @@ them.
 - **Integration tests never share the live journal database.** They create and
   truncate `drem_test`. Pointing them at `drem` (or dumping `drem` from
   `pg_dump`) wipes the owner's account and the app falls back to `/setup`.
+- **A client component must not import `crypto/archive.ts`.** It reaches Argon2
+  through `kdf.ts`, and the build fails trying to resolve `verify` out of
+  `@node-rs/argon2/browser.js`. `MIN_PASSPHRASE_LENGTH` is passed to the export
+  form as a prop from the server page for this reason — the same reason
+  `journal/labels.ts` exists apart from the schema enums.
+- **`crypto.randomUUID()` is secure-context only**, and the offline capture
+  queue mints ids on a phone that is very often on a plain-HTTP LAN origin. Use
+  `randomUuid()` from `src/lib/random-id.ts`. This is the same trap the stack-id
+  fix already paid for once.
+- **The service worker caches the capture shell and static assets, nothing
+  else.** Every other route renders decrypted dream text, and a cached copy of
+  one would be plaintext in the browser's cache directory, surviving lock,
+  logout and the restart that is supposed to end every session. Requests that
+  are not whitelisted are passed through without a `respondWith` so the worker
+  never sees their bodies. If you add a route to that list, be certain it
+  renders nothing a person wrote.
+- **`sw.js` is excluded from the middleware matcher.** A service worker is
+  governed by the CSP delivered with its own script, and the per-request nonce
+  policy is meaningless in a worker scope — `'strict-dynamic'` on a script that
+  was never loaded from a tag is a way to have it refuse to run. Its headers
+  live in `next.config.ts`.
+- **A queued offline capture is only ever dropped by a confirmed save.** An
+  entry the server rejects stays on the device and is retried forever, which is
+  deliberate: discarding it destroys the dream, which is the one thing capture
+  mode exists to prevent. The count on screen is what makes a stuck queue
+  visible.
+- **A restore must stay idempotent.** `dreamFingerprint()` is over the date and
+  the text only — deliberately not the ratings, so an entry edited since the
+  backup is still recognised as the same dream. Widening it to cover the
+  ratings would make every restore after an edit silently duplicate entries,
+  and the restore screen offers no preview precisely because it is repeatable.
+- **`db.execute(sql\`... ${aDate} ...\`)` does not serialise a `Date`.**
+  postgres.js throws `ERR_INVALID_ARG_TYPE` on it. Use the query builder
+  (`db.update(...).set({ createdAt })`), which types the parameter properly.
 
 ## Style
 

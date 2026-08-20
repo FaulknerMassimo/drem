@@ -1,0 +1,16 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" role="img" aria-label="drem">
+  <!--
+    A crescent, cut out of the app's lucid violet on the journal's own
+    background. Legible as a silhouette at 48px, which is the only size that
+    really matters for an icon that lives on a phone's home screen.
+  -->
+  <defs>
+    <mask id="crescent">
+      <rect width="512" height="512" fill="#000"/>
+      <circle cx="248" cy="264" r="148" fill="#fff"/>
+      <circle cx="330" cy="206" r="140" fill="#000"/>
+    </mask>
+  </defs>
+  <rect width="512" height="512" rx="112" fill="#0b0b12"/>
+  <rect width="512" height="512" fill="#9b8cf7" mask="url(#crescent)"/>
+</svg>

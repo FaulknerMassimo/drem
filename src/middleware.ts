@@ -51,5 +51,10 @@ export function middleware(request: NextRequest) {
 
 export const config = {
   // Static assets need no headers and would only add per-request overhead.
-  matcher: ["/((?!_next/static|_next/image|favicon.ico).*)"],
+  //
+  // `sw.js` is excluded for a different reason: a service worker is governed by
+  // the CSP delivered with its own script, and the per-request nonce policy
+  // built here is meaningless — worse, actively wrong — in a worker scope. Its
+  // headers are set in `next.config.ts` instead.
+  matcher: ["/((?!_next/static|_next/image|favicon.ico|sw.js).*)"],
 };

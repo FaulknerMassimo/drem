@@ -60,7 +60,8 @@ export function parseKdfParams(value: unknown): KdfParams {
  */
 const ARGON2ID = 2 as Algorithm;
 
-function argon2Options(params: KdfParams) {
+/** Exported so the archive container can derive under the same algorithm. */
+export function argon2Options(params: KdfParams) {
   return {
     algorithm: ARGON2ID,
     memoryCost: params.memoryCost,

@@ -1,10 +1,13 @@
 import { describe, expect, it } from "vitest";
 import {
   addDays,
+  addMonths,
   daysBetween,
   describeDate,
   isIsoDate,
+  monthKey,
   nightDateFor,
+  startOfMonth,
   startOfWeek,
   toIsoDate,
   weekday,
@@ -49,6 +52,20 @@ describe("date arithmetic", () => {
     expect(addDays("2026-03-28", 1)).toBe("2026-03-29");
     expect(addDays("2026-03-29", 1)).toBe("2026-03-30");
     expect(daysBetween("2026-03-01", "2026-04-01")).toBe(31);
+  });
+
+  it("steps whole months without landing on a day that does not exist", () => {
+    expect(addMonths("2026-01-01", 1)).toBe("2026-02-01");
+    expect(addMonths("2026-12-01", 1)).toBe("2027-01-01");
+    expect(addMonths("2026-01-01", -1)).toBe("2025-12-01");
+    // Thirteen months back from March lands in February of the year before.
+    expect(addMonths("2026-03-01", -13)).toBe("2025-02-01");
+  });
+
+  it("snaps to the month a day belongs to", () => {
+    expect(monthKey("2026-08-19")).toBe("2026-08");
+    expect(startOfMonth("2026-08-19")).toBe("2026-08-01");
+    expect(startOfMonth("2026-08-01")).toBe("2026-08-01");
   });
 
   it("reports weekdays with Sunday as zero", () => {

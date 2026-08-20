@@ -39,14 +39,24 @@ export interface SignCorrelation extends SignTally {
   confident: boolean;
 }
 
-export function correlateSign(tally: SignTally, baseline: number): SignCorrelation {
+/**
+ * `minOccurrences` is a parameter rather than a constant because the same
+ * maths answers the same question for induction techniques, where the floor is
+ * higher — four nights of MILD is a coin flip, four appearances of a recurring
+ * character is a pattern. See `journal/analytics.ts`.
+ */
+export function correlateSign(
+  tally: SignTally,
+  baseline: number,
+  minOccurrences: number = MIN_CONFIDENT_OCCURRENCES,
+): SignCorrelation {
   const lucidRate = tally.occurrences === 0 ? 0 : tally.lucidOccurrences / tally.occurrences;
   return {
     ...tally,
     lucidRate,
     baseline,
     lift: baseline > 0 ? lucidRate / baseline : null,
-    confident: tally.occurrences >= MIN_CONFIDENT_OCCURRENCES,
+    confident: tally.occurrences >= minOccurrences,
   };
 }
 
