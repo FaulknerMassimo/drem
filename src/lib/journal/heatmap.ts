@@ -24,7 +24,7 @@ export interface DayActivity {
 }
 
 export type CellState =
-  /** Outside the year being shown, or still in the future. */
+  /** Outside the range being shown, or still in the future. */
   | "empty"
   /** Nothing was written at all. */
   | "missed"
@@ -51,8 +51,15 @@ export interface HeatmapMonth {
   column: number;
 }
 
+/** The span of days a grid covers, inclusive at both ends. */
+export interface HeatmapRange {
+  from: IsoDate;
+  to: IsoDate;
+}
+
 export interface Heatmap {
-  year: number;
+  from: IsoDate;
+  to: IsoDate;
   /** Columns of exactly 7 cells, top to bottom. */
   weeks: HeatmapCell[][];
   months: HeatmapMonth[];
@@ -66,8 +73,36 @@ export interface Heatmap {
   };
 }
 
+/** Monday, so a week reads as a week rather than as a weekend split in two. */
+export const DEFAULT_FIRST_DAY_OF_WEEK = 1;
+
+/** How many whole weeks the trailing view shows, today's week included. */
+const TRAILING_WEEKS = 53;
+
 /**
- * Fixed word-count thresholds rather than quantiles over the year's own data.
+ * The trailing window: whole weeks ending with the one today falls in.
+ *
+ * This is what the dashboard opens on, because a calendar year is mostly empty
+ * for most of the year — in January it is a grid of 51 blank columns, which
+ * says nothing about the habit. A window that always ends today is always full,
+ * so the shape you are looking at is the shape of the last year of practice
+ * rather than an artefact of the date.
+ */
+export function trailingYear(
+  today: IsoDate,
+  firstDayOfWeek: number = DEFAULT_FIRST_DAY_OF_WEEK,
+): HeatmapRange {
+  const thisWeek = startOfWeek(today, firstDayOfWeek);
+  return { from: addDays(thisWeek, -(TRAILING_WEEKS - 1) * 7), to: today };
+}
+
+/** One year end to end, for looking back at a year that is over. */
+export function calendarYear(year: number): HeatmapRange {
+  return { from: `${year}-01-01`, to: `${year}-12-31` };
+}
+
+/**
+ * Fixed word-count thresholds rather than quantiles over the range's own data.
  *
  * Adaptive scales look better but lie: the same night would change colour
  * because you wrote a long entry three months later. A fixed scale means a
@@ -104,25 +139,43 @@ function cellFor(date: IsoDate, activity: DayActivity | undefined, todayDate: Is
 }
 
 /**
- * Lays a year out as GitHub-style week columns.
+ * The columns a month label needs before the next one — or the edge of the
+ * grid — crowds it out.
+ *
+ * A trailing window is ragged at both ends: it starts mid-month and stops on
+ * whatever day today is, so either end can own a column or two. That is not
+ * enough width to write "Aug" in without it landing on "Sep" or hanging off
+ * the right-hand edge. Calendar months are always at least four columns wide,
+ * so this only ever drops the stubs a trailing window leaves.
+ */
+const MIN_LABEL_COLUMNS = 3;
+
+function labelledMonths(months: readonly HeatmapMonth[], columns: number): HeatmapMonth[] {
+  return months.filter((month, index) => {
+    const nextColumn = months[index + 1]?.column ?? columns;
+    return nextColumn - month.column >= MIN_LABEL_COLUMNS;
+  });
+}
+
+/**
+ * Lays a range of days out as GitHub-style week columns.
  *
  * The grid is padded to whole weeks at both ends, so the first and last columns
- * usually contain days from the neighbouring years; those are rendered as
- * blanks rather than dropped, which keeps every row a true weekday.
+ * usually contain days from outside the range; those are rendered as blanks
+ * rather than dropped, which keeps every row a true weekday.
  */
 export function buildHeatmap(
-  year: number,
+  range: HeatmapRange,
   activity: readonly DayActivity[],
   options: { firstDayOfWeek?: number; today?: IsoDate } = {},
 ): Heatmap {
-  const firstDayOfWeek = options.firstDayOfWeek ?? 1;
+  const firstDayOfWeek = options.firstDayOfWeek ?? DEFAULT_FIRST_DAY_OF_WEEK;
   const todayDate = options.today ?? "9999-12-31";
+  const { from, to } = range;
 
   const byDate = new Map(activity.map((day) => [day.date, day]));
-  const jan1: IsoDate = `${year}-01-01`;
-  const dec31: IsoDate = `${year}-12-31`;
-  const gridStart = startOfWeek(jan1, firstDayOfWeek);
-  const gridEnd = addDays(startOfWeek(dec31, firstDayOfWeek), 6);
+  const gridStart = startOfWeek(from, firstDayOfWeek);
+  const gridEnd = addDays(startOfWeek(to, firstDayOfWeek), 6);
 
   const weeks: HeatmapCell[][] = [];
   const months: HeatmapMonth[] = [];
@@ -134,7 +187,7 @@ export function buildHeatmap(
     const column = Math.floor(offset / 7);
     weeks[column] ??= [];
 
-    if (date < jan1 || date > dec31) {
+    if (date < from || date > to) {
       weeks[column]!.push({
         date,
         state: "empty",
@@ -149,8 +202,8 @@ export function buildHeatmap(
     const day = byDate.get(date);
     weeks[column]!.push(cellFor(date, day, todayDate));
 
-    // The label belongs to the column holding the month's first day, so a month
-    // starting mid-week is not labelled a column early.
+    // The label belongs to the column holding the month's first day in range,
+    // so a month starting mid-week is not labelled a column early.
     const month = date.slice(0, 7);
     if (month !== seenMonth) {
       months.push({ label: date, column });
@@ -166,7 +219,14 @@ export function buildHeatmap(
     }
   }
 
-  return { year, weeks, months, firstDayOfWeek, totals };
+  return {
+    from,
+    to,
+    weeks,
+    months: labelledMonths(months, weeks.length),
+    firstDayOfWeek,
+    totals,
+  };
 }
 
 /** Weekday row labels in the order the grid renders them. */

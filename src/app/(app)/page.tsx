@@ -4,12 +4,8 @@ import { StreakCards } from "@/components/streak-cards";
 import { sessionOrRedirect } from "@/lib/auth/session";
 import { nightDateFor, today } from "@/lib/journal/dates";
 import { countDrafts, recentDreams } from "@/lib/journal/dreams";
-import {
-  activityBetween,
-  activityForYear,
-  journalTotals,
-  journalledYears,
-} from "@/lib/journal/stats";
+import { calendarYear, trailingYear } from "@/lib/journal/heatmap";
+import { activityBetween, journalTotals, journalledYears } from "@/lib/journal/stats";
 import { computeStreaks } from "@/lib/journal/streaks";
 
 export const dynamic = "force-dynamic";
@@ -25,13 +21,17 @@ export default async function DashboardPage({
   const now = new Date();
   const todayDate = today(now);
   const years = await journalledYears(session.userId, now);
-  const parsedYear = Number.parseInt(requestedYear ?? "", 10);
-  const year = years.includes(parsedYear) ? parsedYear : (years[0] ?? now.getFullYear());
 
-  // Streaks are computed over the whole archive, not the shown year: a run that
-  // started in December does not end because the year did.
-  const [yearActivity, allActivity, totals, recent, drafts] = await Promise.all([
-    activityForYear(session.userId, year),
+  // No year asked for means the trailing window, which is the view worth
+  // landing on: it ends today, so it is full whatever the date is.
+  const parsedYear = Number.parseInt(requestedYear ?? "", 10);
+  const selectedYear = years.includes(parsedYear) ? parsedYear : null;
+  const range = selectedYear === null ? trailingYear(todayDate) : calendarYear(selectedYear);
+
+  // Streaks are computed over the whole archive, not the shown range: a run
+  // that started in December does not end because the year did.
+  const [rangeActivity, allActivity, totals, recent, drafts] = await Promise.all([
+    activityBetween(session.userId, range.from, range.to),
     activityBetween(session.userId),
     journalTotals(session.userId),
     recentDreams(session.userId, session.keys, 5),
@@ -65,7 +65,13 @@ export default async function DashboardPage({
 
       <StreakCards streaks={streaks} totals={totals} />
 
-      <Heatmap year={year} activity={yearActivity} today={todayDate} years={years} />
+      <Heatmap
+        range={range}
+        activity={rangeActivity}
+        today={todayDate}
+        years={years}
+        selectedYear={selectedYear}
+      />
 
       <section className="space-y-3">
         <div className="flex items-baseline justify-between">

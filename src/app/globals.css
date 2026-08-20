@@ -102,21 +102,66 @@ body {
   /*
    * The activity heatmap.
    *
-   * Sized in fixed pixels rather than relative units: the grid is 53 columns
-   * wide and must stay square, so it scrolls horizontally on a phone rather
-   * than reflowing into something that is no longer a calendar.
+   * The columns divide whatever width the card gives them rather than being a
+   * fixed 11px, so the grid ends where the card ends instead of trailing off
+   * into a strip of dead space on a wide screen. `aspect-ratio` keeps every
+   * cell square at whatever size that works out to, and the minimum track
+   * width means a phone scrolls the grid sideways rather than reflowing it
+   * into something that is no longer a calendar.
    */
-  .hm-grid {
-    display: grid;
-    grid-auto-flow: column;
-    grid-template-rows: repeat(7, 11px);
-    gap: 3px;
+  .hm-chart {
+    --hm-gap: 3px;
+    --hm-min: 10px;
+    --hm-header: 18px;
+    display: flex;
+    width: 100%;
+    gap: 8px;
   }
 
+  /* Weekday labels: seven rows that stretch to match the cells beside them. */
+  .hm-days {
+    flex: none;
+    display: grid;
+    grid-template-rows: repeat(7, 1fr);
+    row-gap: var(--hm-gap);
+    align-items: center;
+    padding-top: var(--hm-header);
+  }
+
+  .hm-plot {
+    flex: 1 1 auto;
+    min-width: 0;
+  }
+
+  .hm-months,
+  .hm-grid {
+    display: grid;
+    grid-template-columns: repeat(var(--hm-columns, 53), minmax(var(--hm-min), 1fr));
+    column-gap: var(--hm-gap);
+  }
+
+  .hm-months {
+    height: var(--hm-header);
+  }
+
+  .hm-grid {
+    grid-auto-flow: column;
+    grid-template-rows: repeat(7, auto);
+    row-gap: var(--hm-gap);
+  }
+
+  /* Fixed on its own, so the legend's swatches stay swatch-sized. */
   .hm-cell {
     width: 11px;
     height: 11px;
     border-radius: 2px;
+  }
+
+  /* In the grid the column decides the width, and the square follows it. */
+  .hm-grid .hm-cell {
+    width: auto;
+    height: auto;
+    aspect-ratio: 1;
   }
 
   /* Outside the year, or not yet arrived: no square at all. */

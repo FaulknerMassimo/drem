@@ -1,8 +1,10 @@
 import {
   buildHeatmap,
   weekdayLabels,
+  DEFAULT_FIRST_DAY_OF_WEEK,
   type DayActivity,
   type HeatmapCell,
+  type HeatmapRange,
 } from "@/lib/journal/heatmap";
 import { formatDate, formatMonth } from "@/lib/journal/dates";
 
@@ -14,6 +16,11 @@ import { formatDate, formatMonth } from "@/lib/journal/dates";
  * the habit: the fortnight that fell apart in March, the run that started in
  * June. That only works if it is honest about the difference between a night
  * you did not journal and a night you journalled with nothing to report.
+ *
+ * It shows a trailing year by default and a calendar year on request, because
+ * those answer different questions: "how am I doing lately" wants a grid that
+ * ends today, and "what did 2025 look like" wants one that lines up with a
+ * year. Only the second one has a reason to be half empty.
  */
 
 function cellClass(cell: HeatmapCell): string {
@@ -75,20 +82,44 @@ function Legend() {
   );
 }
 
+/** One entry in the view picker: the trailing window, or a year. */
+function PeriodLink({ href, current, children }: {
+  href: string;
+  current: boolean;
+  children: React.ReactNode;
+}) {
+  return (
+    <a
+      href={href}
+      aria-current={current ? "page" : undefined}
+      className={
+        current
+          ? "rounded-md bg-ink-800 px-2 py-1 text-sm text-ink-100"
+          : "rounded-md px-2 py-1 text-sm text-ink-400 hover:text-ink-200"
+      }
+    >
+      {children}
+    </a>
+  );
+}
+
 export function Heatmap({
-  year,
+  range,
   activity,
   today,
-  firstDayOfWeek = 1,
+  firstDayOfWeek = DEFAULT_FIRST_DAY_OF_WEEK,
   years,
+  selectedYear = null,
 }: {
-  year: number;
+  range: HeatmapRange;
   activity: readonly DayActivity[];
   today: string;
   firstDayOfWeek?: number;
   years: readonly number[];
+  /** The year being shown, or null for the trailing window. */
+  selectedYear?: number | null;
 }) {
-  const grid = buildHeatmap(year, activity, { firstDayOfWeek, today });
+  const grid = buildHeatmap(range, activity, { firstDayOfWeek, today });
   const rowLabels = weekdayLabels(firstDayOfWeek);
 
   return (
@@ -96,7 +127,7 @@ export function Heatmap({
       <div className="flex flex-wrap items-baseline justify-between gap-3">
         <div>
           <h2 id="heatmap-heading" className="font-medium">
-            {year}
+            {selectedYear ?? "Last 12 months"}
           </h2>
           <p className="mt-1 text-sm text-ink-400">
             {grid.totals.recalled} night{grid.totals.recalled === 1 ? "" : "s"} recalled
@@ -107,50 +138,38 @@ export function Heatmap({
           </p>
         </div>
 
-        {/* Plain links, so the year survives a reload and can be bookmarked. */}
-        <nav className="flex flex-wrap gap-1" aria-label="Year">
+        {/* Plain links, so the view survives a reload and can be bookmarked. */}
+        <nav className="flex flex-wrap gap-1" aria-label="Period">
+          <PeriodLink href="/" current={selectedYear === null}>
+            Last 12 months
+          </PeriodLink>
           {years.map((candidate) => (
-            <a
+            <PeriodLink
               key={candidate}
               href={`/?year=${candidate}`}
-              aria-current={candidate === year ? "page" : undefined}
-              className={
-                candidate === year
-                  ? "rounded-md bg-ink-800 px-2 py-1 text-sm text-ink-100"
-                  : "rounded-md px-2 py-1 text-sm text-ink-400 hover:text-ink-200"
-              }
+              current={candidate === selectedYear}
             >
               {candidate}
-            </a>
+            </PeriodLink>
           ))}
         </nav>
       </div>
 
       <div className="overflow-x-auto pb-1">
-        <div className="inline-flex gap-2">
-          <div
-            className="grid shrink-0 pt-[18px] text-[10px] text-ink-400"
-            style={{ gridTemplateRows: "repeat(7, 11px)", rowGap: "3px" }}
-            aria-hidden
-          >
+        <div
+          className="hm-chart"
+          // The column count is what the grid divides its width by.
+          style={{ "--hm-columns": grid.weeks.length } as React.CSSProperties}
+        >
+          <div className="hm-days text-[10px] leading-none text-ink-400" aria-hidden>
             {rowLabels.map((label, row) => (
               // Every other row only: seven labels at this size is a smear.
-              <span key={label} className="leading-[11px]">
-                {row % 2 === 1 ? label : ""}
-              </span>
+              <span key={label}>{row % 2 === 1 ? label : ""}</span>
             ))}
           </div>
 
-          <div>
-            <div
-              className="grid text-[10px] text-ink-400"
-              style={{
-                gridTemplateColumns: `repeat(${grid.weeks.length}, 11px)`,
-                columnGap: "3px",
-                height: "18px",
-              }}
-              aria-hidden
-            >
+          <div className="hm-plot">
+            <div className="hm-months text-[10px] text-ink-400" aria-hidden>
               {grid.months.map((month) => (
                 <span
                   key={month.label}

@@ -46,6 +46,12 @@ Five deviations from the original plan, all deliberate:
   makes every unwritten square a dead end. `/night/2026-08-17` shows the day's
   entries *and* offers to start one, which is what clicking an empty square is
   actually for.
+- **The heatmap opens on a trailing year, not the calendar year.** A calendar
+  grid is mostly blank for most of the year — in January it is one column of
+  squares and fifty of nothing, which says something about today's date rather
+  than about the practice. The default window ends today and reaches 52 whole
+  weeks back, so it is always full and always about the last year of recall.
+  The year picker stays, for looking back at a year that is over.
 - **A photographed night is copied a page at a time, then split.** The original
   one-call stack reading asked a vision model to transcribe several pages *and*
   carve them into dreams. On real handwriting that produced a paraphrase of

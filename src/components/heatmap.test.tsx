@@ -10,7 +10,7 @@ import { describe, expect, it } from "vitest";
 import { renderToStaticMarkup } from "react-dom/server";
 import { Heatmap } from "./heatmap";
 import { DreamList } from "./dream-list";
-import type { DayActivity } from "@/lib/journal/heatmap";
+import { calendarYear, trailingYear, type DayActivity } from "@/lib/journal/heatmap";
 import type { DreamSummary } from "@/lib/journal/dreams";
 
 function day(date: string, overrides: Partial<DayActivity> = {}): DayActivity {
@@ -50,7 +50,13 @@ describe("Heatmap", () => {
   ];
 
   const markup = renderToStaticMarkup(
-    <Heatmap year={2026} activity={activity} today="2026-08-17" years={[2026, 2025]} />,
+    <Heatmap
+      range={calendarYear(2026)}
+      activity={activity}
+      today="2026-08-17"
+      years={[2026, 2025]}
+      selectedYear={2026}
+    />,
   );
 
   it("draws a lucid night in a different ramp from a recalled one", () => {
@@ -82,15 +88,49 @@ describe("Heatmap", () => {
   it("offers the years it was given, marking the one in view", () => {
     expect(markup).toContain('href="/?year=2025"');
     expect(markup).toContain('aria-current="page"');
+    // The way back to the default view, whichever year you wandered into.
+    expect(markup).toContain("Last 12 months");
   });
 
   it("does not render days that have not happened as missed", () => {
     const future = renderToStaticMarkup(
-      <Heatmap year={2026} activity={[]} today="2026-01-02" years={[2026]} />,
+      <Heatmap
+        range={calendarYear(2026)}
+        activity={[]}
+        today="2026-01-02"
+        years={[2026]}
+        selectedYear={2026}
+      />,
     );
     // Two days in, only those two can have been missed. Matched against the
     // anchor so the legend's own swatch is not counted.
     expect(future.match(/<a[^>]*hm-missed/g)).toHaveLength(2);
+  });
+});
+
+describe("Heatmap, trailing window", () => {
+  const markup = renderToStaticMarkup(
+    <Heatmap
+      range={trailingYear("2026-01-02")}
+      activity={[day("2025-06-10", { dreamCount: 1, wordCount: 400 })]}
+      today="2026-01-02"
+      years={[2026, 2025]}
+    />,
+  );
+
+  it("draws a full grid in January, where a calendar year draws one column", () => {
+    // 53 columns of 7, minus the days of this week still to come.
+    expect(markup.match(/href="\/night\//g)).toHaveLength(52 * 7 + 5);
+  });
+
+  it("reaches back past the year boundary rather than stopping at it", () => {
+    expect(markup).toContain('href="/night/2025-06-10"');
+    expect(markup).toContain("hm-recalled-3");
+  });
+
+  it("marks itself as the view in force, and still offers the years", () => {
+    expect(markup).toContain('href="/" aria-current="page"');
+    expect(markup).toContain('href="/?year=2025"');
   });
 });
 
