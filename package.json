@@ -4,7 +4,7 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "dev": "next dev",
+    "dev": "next dev --port 43817",
     "build": "next build && npm run build:assets",
     "start": "node .next/standalone/server.js",
     "lint": "next lint",

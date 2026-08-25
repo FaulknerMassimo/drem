@@ -97,10 +97,14 @@ npm run db:migrate
 
 If you serve the app over plain HTTP (localhost, or a LAN hostname), leave
 `APP_ORIGIN` matching exactly how you reach it, scheme included. The CSRF origin
-check compares against it literally, so `http://localhost:3000` and
-`http://127.0.0.1:3000` are *not* interchangeable.
+check compares against it literally, so `http://localhost:43817` and
+`http://127.0.0.1:43817` are *not* interchangeable. Docker Compose publishes
+the uncommon host port `43817` by default to avoid the services commonly using
+port 3000. Set `DREM_PORT` and the matching `APP_ORIGIN` in `.env` if that port
+is already occupied; behind a reverse proxy, `APP_ORIGIN` is the proxy's public
+URL rather than the Docker host port.
 
-Open http://localhost:3000 and create the single account. TOTP enrolment is
+Open http://localhost:43817 and create the single account. TOTP enrolment is
 offered immediately; the recovery codes are shown **once**.
 
 Ollama deliberately stays on the host rather than in a container, so it keeps

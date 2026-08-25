@@ -30,7 +30,7 @@ const schema = z.object({
   NODE_ENV: z.enum(["development", "test", "production"]).default("development"),
 
   /** Public origin, used for strict Origin checks on every mutation. */
-  APP_ORIGIN: z.string().url().default("http://localhost:3000"),
+  APP_ORIGIN: z.string().url().default("http://localhost:43817"),
 
   /**
    * Lets queued embedding/insight/OCR jobs run while nobody is logged in, by

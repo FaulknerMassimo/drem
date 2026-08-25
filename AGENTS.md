@@ -164,8 +164,8 @@ them.
 - **`output: "standalone"` excludes static assets.** `npm run build` copies them
   in via `build:assets`; the Dockerfile does the same. Without it you get an
   unstyled page with no JavaScript, and forms fall back to native POSTs.
-- **`APP_ORIGIN` is compared literally.** `http://localhost:3000` and
-  `http://127.0.0.1:3000` are different origins and CSRF will reject the mismatch.
+- **`APP_ORIGIN` is compared literally.** `http://localhost:43817` and
+  `http://127.0.0.1:43817` are different origins and CSRF will reject the mismatch.
   Next runs its *own* Server Action origin check against the real request host on
   top of ours, so a dev server on a different port fails both — set `APP_ORIGIN`
   to match whatever port it actually bound to.
