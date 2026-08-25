@@ -356,10 +356,14 @@ describe("what a stolen database actually contains", () => {
       .where(eq(settings.userId, userId));
 
     const database =
-      new URL(process.env.DATABASE_URL!).pathname.replace(/^\//, "") || "drem";
+      new URL(process.env.DATABASE_URL!).pathname.replace(/^\//, "") || "drem_test";
+    // The development cluster's container. Named rather than discovered so the
+    // dump is provably taken from the scratch cluster: `drem-db-1` is the one
+    // holding the real journal, and this suite truncates what it reads.
+    const container = process.env.DREM_DEV_DB_CONTAINER ?? "drem-dev-db-1";
     return execFileSync(
       "docker",
-      ["exec", "drem-db-1", "pg_dump", "-U", "drem", "-d", database],
+      ["exec", container, "pg_dump", "-U", "drem", "-d", database],
       { encoding: "utf8", maxBuffer: 64 * 1024 * 1024 },
     );
   }

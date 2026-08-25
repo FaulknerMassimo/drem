@@ -1,5 +1,10 @@
 import "server-only";
 import { z } from "zod";
+import {
+  DREM_ENVIRONMENTS,
+  databaseMismatch,
+  masterKeyMismatch,
+} from "@/lib/db-environment";
 
 /**
  * Validated server configuration.
@@ -28,6 +33,17 @@ const schema = z.object({
     ),
 
   NODE_ENV: z.enum(["development", "test", "production"]).default("development"),
+
+  /**
+   * Which journal this process may touch. Separate from NODE_ENV, which Next
+   * sets per command and which therefore says nothing about the database: a
+   * production build run against the development cluster is a normal thing to
+   * want, and `tsx` leaves NODE_ENV unset entirely.
+   *
+   * Defaults to production, so a process that forgot to declare itself is held
+   * to production's rule rather than let through. See `db-environment.ts`.
+   */
+  DREM_ENV: z.enum(DREM_ENVIRONMENTS).default("production"),
 
   /** Public origin, used for strict Origin checks on every mutation. */
   APP_ORIGIN: z.string().url().default("http://localhost:43817"),
@@ -67,8 +83,25 @@ const schema = z.object({
     .default(60 * 60 * 24 * 7),
 });
 
+/**
+ * The environment and the connection string have to agree, and both have to
+ * agree with the key. Checked here rather than at the first query because the
+ * damage — a truncated journal, a real entry written under a published key — is
+ * done by the time a query runs.
+ */
+const configuration = schema.superRefine((value, ctx) => {
+  const database = databaseMismatch(value.DATABASE_URL, value.DREM_ENV);
+  if (database) {
+    ctx.addIssue({ code: "custom", path: ["DATABASE_URL"], message: database });
+  }
+  const key = masterKeyMismatch(value.MASTER_KEY, value.DREM_ENV);
+  if (key) {
+    ctx.addIssue({ code: "custom", path: ["MASTER_KEY"], message: key });
+  }
+});
+
 function load() {
-  const parsed = schema.safeParse(process.env);
+  const parsed = configuration.safeParse(process.env);
   if (!parsed.success) {
     const issues = parsed.error.issues
       .map((issue) => `  - ${issue.path.join(".")}: ${issue.message}`)

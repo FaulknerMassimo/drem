@@ -92,6 +92,17 @@ Deviations from the original plan, all deliberate:
 - **A bucket with no nights in it has no rate, not a rate of zero.** A month you
   did not journal is drawn as a gap; putting it on the floor of the chart says
   you tried and failed, which is a different and untrue statement.
+- **Development runs against a separate cluster under a published key.** The
+  first arrangement had one database and one `MASTER_KEY` for both the real
+  journal and the seeded one, which meant the commands that make development
+  bearable — truncate, re-seed, drop and migrate — were all one stale
+  environment variable away from the entries the project exists to protect. The
+  split is by cluster rather than by database, so `down -v` cannot cross it, and
+  by key rather than by convention, so a process pointed at the wrong journal
+  fails to decrypt rather than succeeding quietly. The development key is
+  committed in the clear: a checkout that runs without a setup step is worth
+  more than a secret protecting fabricated dreams, and a key nobody could mistake
+  for a real one is safer than one that looks real. See `CONTRIBUTING.md`.
 - **Offline capture keeps plaintext in `localStorage`.** The only place in the
   app dream text is written unencrypted outside the database. The keys live in
   the server's memory, so reaching them is exactly what is impossible when

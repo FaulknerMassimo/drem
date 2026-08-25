@@ -1,49 +1,47 @@
 /**
- * Loads .env for integration tests, then retargets DATABASE_URL at a dedicated
- * `drem_test` database and migrates it.
+ * Points the integration suites at a database of their own and migrates it.
  *
- * The suites truncate freely. They must never be able to do that to the
- * journal the owner actually uses — that is how an account "disappears" and
- * the app falls back to /setup.
+ * The suites truncate freely, which is only safe against a catalog nothing else
+ * reads. They therefore run against `drem_test` — a database that exists in the
+ * development cluster and nowhere else — and they are configured from
+ * `.env.development`, so no test process ever holds the production MASTER_KEY.
  *
- * Hand-rolled rather than pulling in dotenv: the format we generate is
- * trivial, and this keeps a dependency out of a process that handles MASTER_KEY.
+ * The guard is in `src/lib/db-environment.ts`: DREM_ENV=test refuses any
+ * database whose name does not end in `_test`. Pointing this file at `drem` is
+ * how an owner's account "disappears" and the app falls back to /setup, so the
+ * refusal is a hard error rather than a warning.
  */
 import { execFileSync } from "node:child_process";
-import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import postgres from "postgres";
+import { loadEnvironment } from "../scripts/env-file.js";
 
 export const TEST_DATABASE = "drem_test";
 
-const content = readFileSync(new URL("../.env", import.meta.url), "utf8");
-for (const line of content.split("\n")) {
-  const trimmed = line.trim();
-  if (!trimmed || trimmed.startsWith("#")) continue;
-  const eq = trimmed.indexOf("=");
-  if (eq <= 0) continue;
-  const key = trimmed.slice(0, eq);
-  process.env[key] ??= trimmed.slice(eq + 1);
-}
+const loaded = loadEnvironment("test", {
+  fromEnvironment: "development",
+  database: TEST_DATABASE,
+});
 
-const appUrl = process.env.DATABASE_URL;
-if (!appUrl) throw new Error("DATABASE_URL is required for integration tests");
-
-const parsed = new URL(appUrl);
-if (parsed.pathname.replace(/^\//, "") !== TEST_DATABASE) {
-  const admin = postgres(appUrl, { max: 1, idle_timeout: 5 });
-  try {
-    const [row] = await admin`
-      SELECT EXISTS (SELECT 1 FROM pg_database WHERE datname = ${TEST_DATABASE}) AS present
-    `;
-    if (!row?.present) {
-      await admin.unsafe(`CREATE DATABASE ${TEST_DATABASE}`);
-    }
-  } finally {
-    await admin.end();
+/*
+ * `drem_test` is created by the dev cluster's init script, but only on a volume
+ * that was created after it was added. Creating it here as well means a
+ * checkout with an older dev volume does not have to rebuild it to run tests.
+ * The maintenance database is used for the connection: `drem_test` may not
+ * exist yet, and `drem_dev` may be mid-rebuild.
+ */
+const admin = new URL(process.env.DATABASE_URL!);
+admin.pathname = "/postgres";
+const cluster = postgres(admin.toString(), { max: 1, idle_timeout: 5 });
+try {
+  const [row] = await cluster`
+    SELECT EXISTS (SELECT 1 FROM pg_database WHERE datname = ${loaded.database}) AS present
+  `;
+  if (!row?.present) {
+    await cluster.unsafe(`CREATE DATABASE ${loaded.database}`);
   }
-  parsed.pathname = `/${TEST_DATABASE}`;
-  process.env.DATABASE_URL = parsed.toString();
+} finally {
+  await cluster.end();
 }
 
 const globalForTests = globalThis as typeof globalThis & { dremTestMigrated?: true };

@@ -6,6 +6,7 @@ whole archive, handwritten-page OCR, and semantic search — with the journal
 encrypted at rest throughout.
 
 Status: **Phase 6 — Analytics and polish.** See [Roadmap](#roadmap).
+Working on it: [CONTRIBUTING.md](CONTRIBUTING.md).
 
 ## Security model
 
@@ -88,12 +89,16 @@ sudo usermod -aG docker $USER               # log out and back in
 ollama pull embeddinggemma                  # 768-dim embeddings for search
 
 cp .env.example .env
-npm run keygen >> .env                      # generates MASTER_KEY
+npm run --silent keygen >> .env             # generates MASTER_KEY
 # then set POSTGRES_PASSWORD and DATABASE_URL in .env
 
 docker compose up -d
-npm run db:migrate
+npm run db:migrate:prod
 ```
+
+`db:migrate:prod` rather than `db:migrate`: the unsuffixed command targets the
+development journal, because the default should be the one that cannot lose
+anything. See [CONTRIBUTING.md](CONTRIBUTING.md).
 
 If you serve the app over plain HTTP (localhost, or a LAN hostname), leave
 `APP_ORIGIN` matching exactly how you reach it, scheme included. The CSRF origin
@@ -132,16 +137,24 @@ scratch: vectors from two models are not comparable.
 
 ### Development
 
+Development runs against a **separate Postgres cluster, under a separate key**,
+so working on drem cannot reach the journal it is for. Nothing below touches the
+real one, and none of it needs your `.env`:
+
 ```bash
 npm install
-npm run dev:up             # postgres + whisper, ports on loopback only
-npm run db:migrate
-npm run dev
+npm run dev:up             # the development cluster; ports on loopback only
+npm run dev:reset          # drop, migrate, create the account, seed ~400 nights
+npm run dev                # http://localhost:43818
 
 npm test                   # crypto and security suites; needs no infrastructure
 npm run test:integration   # end-to-end against a real database; needs dev:up
 npm run typecheck
 ```
+
+[CONTRIBUTING.md](CONTRIBUTING.md) is the full guide: what separates the three
+journals, what each command is allowed to touch, and what to check before a
+change to the schema.
 
 `npm run test:integration` includes the assertion this whole design exists for:
 it seeds a full entry, takes a real `pg_dump`, and fails if a single word of

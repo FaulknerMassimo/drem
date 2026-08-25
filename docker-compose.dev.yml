@@ -1,19 +1,44 @@
-# Development overlay. Apply explicitly:
-#   docker compose -f docker-compose.yml -f docker-compose.dev.yml up -d db whisper
+# The development stack: a journal full of generated dreams.
 #
-# It exists so `npm run dev` and `npm run db:migrate` can reach the database
-# from the host. The base compose file keeps these ports closed, which is the
-# right default for an actual deployment.
+# Applied over the production file, but as a *different compose project* —
+# `npm run dev:up` passes `-p drem-dev`, so these are different containers on
+# different volumes from the ones holding the real journal. `docker compose
+# down -v` here cannot reach it.
+#
+#   npm run dev:up      # start
+#   npm run dev:reset   # rebuild the journal from nothing
+#   npm run dev:down    # stop
+#
+# Interpolated from `.env.development`, not `.env`: this stack must never be
+# able to read the production password out of a file it was not given.
+name: drem-dev
+
 services:
   db:
-    ports:
-      # Loopback only: never reachable from the network, even on this machine.
+    environment:
+      # The name is the guard. Every process declares which journal it is for
+      # and refuses a database whose name disagrees — see db-environment.ts.
+      POSTGRES_DB: drem_dev
+    volumes:
+      # `drem_test`, created here so the integration suites have somewhere to
+      # truncate. It exists in this cluster only; production has no such
+      # database and no way to acquire one.
+      - ./docker/postgres-init-dev:/docker-entrypoint-initdb.d:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U drem -d drem_dev"]
+    # !override, not a plain list: compose *appends* sequences when it merges
+    # files, so without it this cluster would also inherit production's 5433 and
+    # the two would fight over the port that reaches the real journal.
+    ports: !override
+      # Loopback only, and the *default* Postgres port on purpose: a command
+      # that did not say which journal it meant should land here, not on the
+      # real one, which is published on 5433.
       - "127.0.0.1:5432:5432"
 
   whisper:
-    ports:
+    ports: !override
       - "127.0.0.1:8000:8000"
 
-  # The app runs via `npm run dev` on the host during development.
+  # The app runs via `npm run dev` on the host, on port 43818.
   app:
     profiles: ["never"]

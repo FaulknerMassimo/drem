@@ -1,3 +1,10 @@
+# The production stack: the real journal. `docker compose up -d` runs it.
+#
+# Development runs a stack of its own — a different project, different
+# containers, different volumes — from docker-compose.dev.yml. The two share
+# nothing but the host's Ollama. See CONTRIBUTING.md.
+name: drem
+
 services:
   db:
     image: pgvector/pgvector:pg17
@@ -8,10 +15,13 @@ services:
       POSTGRES_DB: drem
     volumes:
       - db-data:/var/lib/postgresql/data
-      - ./docker/postgres-init:/docker-entrypoint-initdb.d:ro
-    # Not published to the host: only the app needs to reach the database.
-    expose:
-      - "5432"
+    ports:
+      # Loopback only: never reachable from the network. Published at all
+      # because migrations, `pg_dump` and drizzle-studio are run from the host
+      # and the app image carries no tooling. 5433 rather than 5432 so that a
+      # command that forgot which journal it meant — psql's default, a stale
+      # DATABASE_URL — lands on the development cluster instead of this one.
+      - "127.0.0.1:5433:5432"
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U drem -d drem"]
       interval: 5s
@@ -52,6 +62,9 @@ services:
       SEARCH_BACKEND: ${SEARCH_BACKEND:-encrypted}
       UPLOAD_DIR: /data/uploads
       NODE_ENV: production
+      # Refuses to start against a database named for development or tests, and
+      # refuses the development key. See src/lib/db-environment.ts.
+      DREM_ENV: production
     extra_hosts:
       - "host.docker.internal:host-gateway"
     ports:

@@ -10,9 +10,11 @@ next-env.d.ts
 # entry permanently unrecoverable; leaking it removes one of the two
 # factors protecting them.
 .env
-.env.local
-.env*.local
+.env.*
 !.env.example
+# Development configuration, committed deliberately: it holds a published key
+# and a scratch database. See the header in the file itself.
+!.env.development
 
 # Encrypted attachment blobs and database volumes
 /data/

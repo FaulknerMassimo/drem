@@ -41,6 +41,11 @@ It never changes, so this is a one-time job.
 docker compose exec db pg_dump -U drem drem > drem-$(date +%F).sql
 ```
 
+Run from the repository root and without `-p`, so it reaches the production
+compose project. There is a second cluster on this machine holding the
+development journal (`drem-dev`, database `drem_dev`); backing that one up
+preserves several hundred dreams nobody had. See CONTRIBUTING.md.
+
 Everything: entries, nights, tags, insights, embeddings, dream signs, sessions,
 the audit log. All still encrypted — this file is safe to store on a NAS or a
 cloud drive, because without `MASTER_KEY` *and* your password it decrypts to

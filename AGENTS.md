@@ -3,7 +3,9 @@
 Instructions for coding agents. Read this before touching anything.
 
 `docs/PLAN.md` holds the roadmap and which phase is next. `README.md` holds the
-security model. This file holds the rules and the traps.
+security model. `CONTRIBUTING.md` holds which of the three journals you are
+pointed at, and is worth reading first — this machine runs a real one. This file
+holds the rules and the traps.
 
 ## What this is
 
@@ -16,17 +18,27 @@ of it.
 
 ```bash
 npm install
-npm run keygen >> .env       # only on a fresh install; see the warning below
-npm run dev:up               # postgres + whisper, loopback ports only
-npm run db:migrate
-npm run dev
+npm run dev:up               # the development cluster; loopback ports only
+npm run dev:reset            # drop, migrate, create the account, seed
+npm run dev                  # http://localhost:43818
 ```
 
-Ollama runs on the **host**, not in a container, so it keeps GPU access.
+Log in as `dev@drem.local` / `development-journal`. No `.env` is needed and none
+should be created: development is configured by the committed `.env.development`,
+whose `MASTER_KEY` decodes to the ASCII `drem dev key - not a secret ----`.
+
+The real journal is a different cluster, a different key and a different port —
+`docker compose up -d` on 43817. Everything about the boundary, including what
+to ask before running, is in `CONTRIBUTING.md`.
+
+Ollama runs on the **host**, not in a container, so it keeps GPU access, and is
+the one thing the two environments share.
 
 **Never regenerate `MASTER_KEY` on an install that has data.** Every entry
 becomes permanently unreadable. `scripts/generate-keys.ts` refuses to run when
-`.env` exists — do not work around that.
+`.env` exists — do not work around that. `npm run --silent keygen`: without
+`--silent`, npm's own `> drem@0.1.0 keygen` banner is appended to `.env` along
+with the key.
 
 ## Testing
 
@@ -61,9 +73,10 @@ readable only by opt-in: under the default `SEARCH_BACKEND=encrypted`,
 `embeddings.vector` must stay null. A vector is invertible enough to leak the
 gist of an entry, so it filling itself in makes the trade-off for the operator.
 
-`npm run seed -- --email ... --password ...` fills a development journal with
-months of plausible nights. Features about shape over time — the heatmap, the
-streaks — look fine and prove nothing with four hand-typed entries.
+`npm run seed` fills the development journal with months of plausible nights,
+using the account `npm run dev:reset` created. Features about shape over time —
+the heatmap, the streaks — look fine and prove nothing with four hand-typed
+entries. It refuses to run against anything but a `_dev` database.
 
 ## Rules
 
@@ -117,6 +130,7 @@ src/lib/capture/    encrypted attachments, stack reading, whisper, import, split
 src/lib/semantic/   embeddings, meaning-based search, dream signs + pure:
                     vectors, correlation, text, signs-parse
 src/lib/backup/     passphrase-sealed export and merge-restore + pure: document
+src/lib/db-environment.ts  which journal a process may write to
 src/db/schema.ts    all 15 tables, with the reasoning in comments
 src/app/(auth)/     setup, login, TOTP verify
 src/app/(app)/      everything behind a session
@@ -217,8 +231,35 @@ them.
   to hang a similarity score off it is invalid HTML and a hydration error. Pass
   `aside` instead, or use `ScoredDreamList`.
 - **Integration tests never share the live journal database.** They create and
-  truncate `drem_test`. Pointing them at `drem` (or dumping `drem` from
-  `pg_dump`) wipes the owner's account and the app falls back to `/setup`.
+  truncate `drem_test`, in the development cluster. Pointing them at `drem` (or
+  dumping `drem` from `pg_dump`) wipes the owner's account and the app falls back
+  to `/setup`. `test/load-env.ts` now refuses rather than trusting the caller:
+  it checks the connection string it was handed *before* retargeting the path to
+  `drem_test`, because otherwise an exported `DATABASE_URL` would be laundered
+  into a scratch database sitting next to the real journal.
+- **Every process declares which journal it may touch.** `DREM_ENV` plus the
+  database name, checked in `src/lib/db-environment.ts`: `_dev` for development,
+  `_test` for tests, neither for production. The name is the guard because it
+  travels inside every connection string and appears in the error. If something
+  refuses to run, work out which half is stale — do not export `DATABASE_URL`
+  around it.
+- **`next dev` falls back to `.env`.** It reads `.env.development` first, but
+  anything that file does not define falls through to the production one. That is
+  why `.env.development` sets `DATABASE_URL`, `MASTER_KEY`, `APP_ORIGIN` and
+  `UPLOAD_DIR` explicitly even where the values look redundant, and why the
+  database-name check exists to catch it when a new one is forgotten.
+- **drizzle-kit only ever loads `.env`.** Every migration it ran was aimed at
+  production regardless of what the caller meant. `scripts/drizzle.ts` resolves
+  the connection string first, prints the database it landed on, and hands
+  drizzle-kit an environment it cannot reinterpret — invoke it through the
+  `db:*` scripts rather than calling `drizzle-kit` directly.
+- **Compose appends sequences when it merges files.** `docker-compose.dev.yml`
+  overrides `ports` with `!override`; without it the development cluster
+  inherits production's published 5433 as well as its own 5432, and the two
+  fight over the port that reaches the real journal.
+- **The `pg_dump` canary names its container.** `drem-dev-db-1`, the development
+  cluster — `drem-db-1` is the one holding real dreams, and that suite truncates
+  what it reads. Override with `DREM_DEV_DB_CONTAINER` rather than editing it.
 - **A client component must not import `crypto/archive.ts`.** It reaches Argon2
   through `kdf.ts`, and the build fails trying to resolve `verify` out of
   `@node-rs/argon2/browser.js`. `MIN_PASSPHRASE_LENGTH` is passed to the export

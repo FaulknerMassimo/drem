@@ -6,26 +6,28 @@
  * generates months of nights with realistic gaps, so a broken week boundary or
  * an off-by-one streak is visible immediately.
  *
- *   npm run seed -- --email you@example.com --password '...' --days 400
+ *   npm run seed
+ *   npm run seed -- --days 120
+ *   npm run seed -- --email you@example.com --password '...'
+ *
+ * Development only, enforced by the database name rather than by a flag: this
+ * writes hundreds of fabricated entries, and a journal that has to be told
+ * apart from a real one by reading it is already the wrong shape.
  *
  * Run through `tsx --conditions=react-server` (see package.json): the journal
  * modules import `server-only`, which throws under Node's default resolution
  * and resolves to a no-op under that condition — the same one Next uses.
  *
- * Requires an account to already exist: the data key is recovered from the
- * password exactly as a login would, because there is no other way to write an
- * entry this instance will be able to read back.
+ * Requires an account to already exist (`npm run dev:reset` makes one): the
+ * data key is recovered from the password exactly as a login would, because
+ * there is no other way to write an entry this instance will be able to read
+ * back.
  */
-import { readFileSync } from "node:fs";
+import { describeTarget, loadEnvironment } from "./env-file.js";
 
-// Loaded before anything that reads env(), which caches on first use.
-for (const line of readFileSync(new URL("../.env", import.meta.url), "utf8").split("\n")) {
-  const trimmed = line.trim();
-  if (!trimmed || trimmed.startsWith("#")) continue;
-  const eq = trimmed.indexOf("=");
-  if (eq <= 0) continue;
-  process.env[trimmed.slice(0, eq)] ??= trimmed.slice(eq + 1);
-}
+// Before anything that reads env(), which caches on first use. Refuses outright
+// if the connection string does not name a development database.
+const loaded = loadEnvironment("development");
 
 const { db } = await import("../src/db/index.js");
 const { dreams } = await import("../src/db/schema.js");
@@ -41,19 +43,18 @@ function flag(name: string): string | undefined {
   return index === -1 ? undefined : process.argv[index + 1];
 }
 
-const email = flag("email") ?? process.env.DREM_SEED_EMAIL;
-const password = flag("password") ?? process.env.DREM_SEED_PASSWORD;
+const email = flag("email") ?? process.env.DREM_DEV_EMAIL;
+const password = flag("password") ?? process.env.DREM_DEV_PASSWORD;
 const days = Number.parseInt(flag("days") ?? "400", 10);
 const force = process.argv.includes("--force");
 
-if (process.env.NODE_ENV === "production") {
-  throw new Error("Refusing to seed a production database.");
-}
 if (!email || !password) {
   throw new Error(
     "Usage: npm run seed -- --email <email> --password <password> [--days 400] [--force]",
   );
 }
+
+console.error(`Seeding ${describeTarget(loaded)}`);
 
 /*
  * Deterministic, so two runs produce the same journal and a bug found once can

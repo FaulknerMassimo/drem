@@ -1,0 +1,23 @@
+# `docker/Dockerfile` does `COPY . .` into the build stage.
+#
+# Without this file, MASTER_KEY and every encrypted attachment on the host end
+# up in the image's build layers — readable by anyone who can pull it, and
+# needed by nothing: the build gets its placeholders from the Dockerfile and its
+# real configuration from compose at runtime.
+#
+# It also stops the host's node_modules landing on top of the ones the deps
+# stage just installed, which is how a native module built for the host libc
+# ends up inside a Debian image.
+.env
+.env.*
+.env.example
+
+data/
+uploads/
+*.pgdump
+
+node_modules/
+.next/
+.git/
+coverage/
+*.tsbuildinfo
