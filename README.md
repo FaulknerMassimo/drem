@@ -5,8 +5,53 @@ tracking with a GitHub-style activity heatmap, AI dream-sign detection across th
 whole archive, handwritten-page OCR, and semantic search — with the journal
 encrypted at rest throughout.
 
-Status: **Phase 6 — Analytics and polish.** See [Roadmap](#roadmap).
-Working on it: [CONTRIBUTING.md](CONTRIBUTING.md).
+## App overview
+
+drem is a single-user journal built around the nightly loop of capturing a
+dream before it fades, writing it up later, and finding patterns across months
+of entries. The dashboard opens on a trailing year of recall, with current and
+best streaks, recent entries, and a heatmap that distinguishes lucid dreams,
+ordinary recall, and journalled nights with nothing remembered.
+
+The app is organised by when each part is useful:
+
+| Area | What it is for |
+| --- | --- |
+| **Write** | Record tonight, capture quickly, finish drafts, or import existing material |
+| **Journal** | Browse and filter every entry, search by meaning, and find similar dreams |
+| **Patterns** | Review recurring dream signs, statistics, and longer-period reports |
+| **System** | Configure model providers, export or restore backups, and manage recovery codes |
+
+The separate Capture screen removes the normal app chrome and uses a deep-red
+palette for the middle of the night. It asks for only the dream text; the result
+waits as a draft for the ratings, tags, techniques, and context that are easier
+to add in daylight.
+
+## Features
+
+- **Night-centred journalling.** Record several dreams, a no-recall night, night
+  notes, lucidity, vividness, control, clarity, emotional tone, techniques, and
+  tags without pretending every night is a single entry.
+- **Fast and offline capture.** Install drem as a PWA, open Capture from a home
+  screen shortcut, and keep unsent captures queued visibly on the device until
+  the server confirms each save.
+- **Paper, audio, and file import.** Transcribe photographed pages one at a
+  time, split a joined night into separate dreams, review everything before it
+  is filed, transcribe voice memos locally, or import JSON, Markdown, and CSV.
+- **Recall and lucidity trends.** Follow a year-long activity heatmap, recall
+  and lucid streaks, technique effectiveness, monthly rates, and changes in
+  vividness, control, and clarity.
+- **Dream signs and semantic search.** Find entries with similar meaning,
+  discover recurring people, places, and impossible details, and compare each
+  sign's lucid rate with the archive's baseline.
+- **Optional AI insights.** Assign local or remote providers separately to
+  extraction, coaching, symbolic reading, reports, capture, and semantic roles.
+  Every remote request names its destination before any dream leaves the
+  machine, and failed queued work reports the reason on the requesting screen.
+- **Encrypted attachments and portable backups.** Keep page photographs and
+  voice recordings encrypted alongside the journal, export a passphrase-sealed
+  archive, and merge-restore it into a fresh or existing installation without
+  duplicating entries.
 
 ## Security model
 
@@ -77,45 +122,13 @@ CSRF via Origin check *and* double-submit token · per-IP and per-account rate
 limiting with quartic backoff · session tokens stored only as digests · audit
 log that records structure, never content · EXIF/GPS stripped from every upload.
 
-## Setup
+## Installation
 
-Requires Docker, and Ollama on the host.
+See [docs/INSTALLATION.md](docs/INSTALLATION.md) for the production setup,
+including Docker, environment and key configuration, host Ollama networking,
+model migration and cleanup, verification, and troubleshooting.
 
-```bash
-sudo pacman -S docker docker-compose        # Arch; adjust for your distro
-sudo systemctl enable --now docker
-sudo usermod -aG docker $USER               # log out and back in
-
-ollama pull embeddinggemma                  # 768-dim embeddings for search
-
-cp .env.example .env
-npm run --silent keygen >> .env             # generates MASTER_KEY
-# then set POSTGRES_PASSWORD and DATABASE_URL in .env
-
-docker compose up -d
-npm run db:migrate:prod
-```
-
-`db:migrate:prod` rather than `db:migrate`: the unsuffixed command targets the
-development journal, because the default should be the one that cannot lose
-anything. See [CONTRIBUTING.md](CONTRIBUTING.md).
-
-If you serve the app over plain HTTP (localhost, or a LAN hostname), leave
-`APP_ORIGIN` matching exactly how you reach it, scheme included. The CSRF origin
-check compares against it literally, so `http://localhost:43817` and
-`http://127.0.0.1:43817` are *not* interchangeable. Docker Compose publishes
-the uncommon host port `43817` by default to avoid the services commonly using
-port 3000. Set `DREM_PORT` and the matching `APP_ORIGIN` in `.env` if that port
-is already occupied; behind a reverse proxy, `APP_ORIGIN` is the proxy's public
-URL rather than the Docker host port.
-
-Open http://localhost:43817 and create the single account. TOTP enrolment is
-offered immediately; the recovery codes are shown **once**.
-
-Ollama deliberately stays on the host rather than in a container, so it keeps
-GPU access. Containers reach it at `host.docker.internal:11434`.
-
-### Search and dream signs
+## Search and dream signs
 
 Assign a model to the **Embedding** role in Settings before searching —
 `embeddinggemma` in Ollama is the default the schema is dimensioned for. The
@@ -135,7 +148,7 @@ Entries written before you assigned a model (and anything imported) need one
 backfill pass from that page. Changing the embedding model re-indexes from
 scratch: vectors from two models are not comparable.
 
-### Development
+## Development
 
 Development runs against a **separate Postgres cluster, under a separate key**,
 so working on drem cannot reach the journal it is for. Nothing below touches the
@@ -159,19 +172,6 @@ change to the schema.
 `npm run test:integration` includes the assertion this whole design exists for:
 it seeds a full entry, takes a real `pg_dump`, and fails if a single word of
 dream content, the password, or `MASTER_KEY` appears anywhere in it.
-
-## Roadmap
-
-- [x] **0** — Scaffold, compose, schema, migrations
-- [x] **1** — Crypto core, session key store, TOTP, CSRF, rate limiting, headers, audit log,
-      setup/login/recovery UI — verified end to end in a browser against a live database
-- [x] **2** — Nights and dreams, editor, activity heatmap, streaks, 3am capture mode
-- [x] **3** — AI provider layer (Ollama / OpenAI-compatible / Anthropic), insights pipeline
-- [x] **4** — Photo OCR with review, bulk import, voice memos, AI split of multi-dream logs
-- [x] **5** — Embeddings with backfill, semantic search, "dreams like this", dream-sign
-      detection with lucidity correlation
-- [x] **6** — Statistics (lucid rate over time, technique effectiveness, vividness trends),
-      installable PWA with offline capture, passphrase-sealed export/import, backup docs
 
 ## Backups
 
