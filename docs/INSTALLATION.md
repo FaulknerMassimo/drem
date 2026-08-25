@@ -213,6 +213,21 @@ CSRF validation. If you change `DREM_PORT`, change `APP_ORIGIN` to match. Behind
 a reverse proxy, `APP_ORIGIN` is the proxy's public URL rather than the Docker
 host port.
 
+`APP_ORIGIN` names one canonical origin; it is not an allowlist. To open drem
+from a phone on the local network, set it to the server's LAN address, for
+example `http://192.168.1.221:43817`, restart the app container, and use that
+same URL on the server itself. Form submissions from `http://localhost:43817`
+will then be rejected because it is a different origin. Sessions are also
+scoped to the hostname, so treating the two addresses as separate entry points
+would require separate logins even if both were allowed.
+
+For a stable multi-device setup, give the server a DHCP reservation and use one
+name from local DNS, such as `drem.home.arpa`, on every device. Set
+`APP_ORIGIN=http://drem.home.arpa:43817` and make sure that name resolves to the
+server's LAN address from both the computer and the phone. Plain HTTP does not
+protect journal content or session cookies while they travel across the local
+network; use an HTTPS reverse proxy if that network is not fully trusted.
+
 ## Verify Ollama from every boundary
 
 These checks should all report the same running Ollama server and model list:
