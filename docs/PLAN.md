@@ -79,10 +79,10 @@ Deviations from the original plan, all deliberate:
   safe destructive version, so it is not offered. Entries are deduplicated on a
   digest of date and text, which makes a restore repeatable rather than
   cumulative — the property that lets it be run without a preview step.
-- **The archive carries what was written, not what was derived.** Insights,
-  embeddings and dream signs are rebuilt by re-running the models, and would
-  roughly double the file with data that is stale as soon as a prompt or an
-  embedding model changes.
+- **The archive carries the journal, not what was derived from it.** Insights,
+  embeddings, dream signs and chat transcripts are rebuilt or started again
+  from restored entries. Carrying them would roughly double the file with data
+  that is stale as soon as a prompt or model changes.
 - **Statistics divide by nights journalled, not nights recalled.** The
   dashboard's headline lucid rate answers "when I remembered a night, how often
   was it lucid"; a technique has to answer "when I did WBTB, did it work", and a
@@ -197,6 +197,11 @@ current one's tests pass.
       several paragraphs of it. Verified end to end over HTTP against a live
       database and a local Ollama, including the failure path with the model
       server stopped.
+- [x] **8 — Journal chat.** Encrypted conversation history and a bounded,
+      provider-native tool loop over dreams, nights, notes, signs, tags,
+      reports, exact text search, activity and technique statistics. Tools are
+      read-only, validated server-side, and their decrypted results are never
+      persisted.
 
 ## Data model notes
 

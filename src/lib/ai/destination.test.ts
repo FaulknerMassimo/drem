@@ -103,5 +103,6 @@ describe("destination of a model call", () => {
     expect(all.report.role).toBe("report");
     expect(all.ocr.role).toBe("ocr");
     expect(all.split.role).toBe("split");
+    expect(all.chat.role).toBe("chat");
   });
 });

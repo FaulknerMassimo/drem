@@ -51,6 +51,7 @@ export const aiConfigSchema = z.object({
     split: assignmentSchema.optional(),
     embedding: assignmentSchema.optional(),
     signs: assignmentSchema.optional(),
+    chat: assignmentSchema.optional(),
   }),
 });
 
@@ -64,6 +65,7 @@ export function emptyRoles(): RoleMap {
     split: null,
     embedding: null,
     signs: null,
+    chat: null,
   };
 }
 
@@ -107,6 +109,7 @@ export function parseAiConfig(value: unknown): AiConfig {
       split: parsed.roles.split ?? null,
       embedding: parsed.roles.embedding ?? null,
       signs: parsed.roles.signs ?? null,
+      chat: parsed.roles.chat ?? null,
     },
   };
 }

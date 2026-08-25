@@ -11,8 +11,10 @@
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { eq, sql } from "drizzle-orm";
 import { db } from "@/db";
-import { insights, jobs, nights, settings, users } from "@/db/schema";
-import { saveAiConfig } from "@/lib/ai/config";
+import { chatMessages, chatThreads, insights, jobs, nights, settings, users } from "@/db/schema";
+import { loadAiConfig, saveAiConfig } from "@/lib/ai/config";
+import { runConversationAgent } from "@/lib/ai/conversation-agent";
+import { getConversation, saveConversationExchange } from "@/lib/ai/conversations";
 import { emptyRoles } from "@/lib/ai/schema";
 import { insightsForDream, latestInsightForDream, saveInsight } from "@/lib/ai/insights";
 import { enqueueDreamInsight, parseDreamPayload } from "@/lib/ai/jobs";
@@ -70,6 +72,7 @@ async function assignLocalModel() {
       ...emptyRoles(),
       extraction: { providerId: "ollama", model: "llama3.2" },
       lucidity: { providerId: "ollama", model: "llama3.2" },
+      chat: { providerId: "ollama", model: "llama3.2" },
     },
   });
 }
@@ -87,7 +90,7 @@ afterAll(async () => {
 });
 
 beforeEach(async () => {
-  await db.execute(sql`truncate table ${nights}, ${insights}, ${jobs} restart identity cascade`);
+  await db.execute(sql`truncate table ${nights}, ${insights}, ${jobs}, ${chatThreads} restart identity cascade`);
   await db.update(settings).set({ aiConfigEnc: null }).where(eq(settings.userId, userId));
   __clearKeyStore();
 });
@@ -133,6 +136,59 @@ describe("encrypted config and insights", () => {
     const asText = Buffer.from(row!.aiConfigEnc!).toString("utf8");
     expect(asText).not.toContain(CANARY);
     expect(asText).not.toContain("sk-");
+  });
+});
+
+describe("journal chat", () => {
+  it("uses a read-only dream tool and stores only an encrypted final transcript", async () => {
+    const dreamId = await createDream(
+      userId,
+      keys,
+      dreamInput({ title: "The cathedral", body: `I dreamt of ${CANARY}` }),
+    );
+    await assignLocalModel();
+    const fetchImpl = vi.fn(async (_url: string | URL | Request, init?: RequestInit) => {
+      const body = JSON.parse(String(init?.body));
+      const toolResult = body.messages.find((message: { role: string }) => message.role === "tool");
+      if (!toolResult) {
+        expect(body.tools.some((tool: { function: { name: string } }) => tool.function.name === "read_dreams")).toBe(true);
+        return new Response(JSON.stringify({
+          message: {
+            content: "",
+            tool_calls: [{ function: { name: "read_dreams", arguments: { ids: [dreamId] } } }],
+          },
+        }), { headers: { "content-type": "application/json" } });
+      }
+      expect(toolResult.content).toContain(CANARY);
+      return new Response(JSON.stringify({ message: { content: "A grounded answer." } }), {
+        headers: { "content-type": "application/json" },
+      });
+    });
+    vi.stubGlobal("fetch", fetchImpl);
+
+    const config = await loadAiConfig(userId, keys);
+    const answer = await runConversationAgent(
+      config,
+      { userId, keys },
+      [],
+      `What happened in ${CANARY}?`,
+    );
+    expect(answer.text).toBe("A grounded answer.");
+    expect(answer.toolCalls).toBe(1);
+
+    const threadId = await saveConversationExchange(userId, keys, null, {
+      user: `What happened in ${CANARY}?`,
+      assistant: answer.text,
+      provider: answer.destination.providerName,
+      model: answer.destination.model,
+    });
+    expect((await getConversation(userId, keys, threadId))?.messages).toHaveLength(2);
+
+    const stored = await db.select().from(chatMessages);
+    expect(stored).toHaveLength(2);
+    for (const row of stored) {
+      expect(Buffer.from(row.contentEnc).toString("utf8")).not.toContain(CANARY);
+    }
   });
 });
 

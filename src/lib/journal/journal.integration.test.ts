@@ -17,6 +17,7 @@ import { and, eq, sql } from "drizzle-orm";
 import { db } from "@/db";
 import {
   attachments,
+  chatThreads,
   dreamTags,
   dreams,
   insights,
@@ -30,6 +31,7 @@ import { createInitialAccount } from "@/lib/auth/accounts";
 import { saveAiConfig } from "@/lib/ai/config";
 import { emptyRoles } from "@/lib/ai/schema";
 import { saveInsight } from "@/lib/ai/insights";
+import { saveConversationExchange } from "@/lib/ai/conversations";
 import { createImageAttachment, saveReading } from "@/lib/capture/attachments";
 import { dreamFromTranscript } from "@/lib/capture/fields";
 import { prepareImage } from "@/lib/capture/image";
@@ -65,7 +67,7 @@ async function wipeAll() {
 }
 
 async function wipeJournal() {
-  await db.execute(sql`truncate table ${nights}, ${dreams}, ${tags}, ${attachments} restart identity cascade`);
+  await db.execute(sql`truncate table ${nights}, ${dreams}, ${tags}, ${attachments}, ${chatThreads} restart identity cascade`);
 }
 
 /** A dream input with everything optional left out. */
@@ -595,6 +597,12 @@ describe("what a stolen database actually contains", () => {
         },
       ],
       roles: emptyRoles(),
+    });
+    await saveConversationExchange(userId, keys, null, {
+      user: `question about ${CANARY}`,
+      assistant: `answer grounded in ${CANARY}`,
+      provider: "Ollama",
+      model: "llama3.2",
     });
     const jpeg = await sharp({
       create: { width: 8, height: 8, channels: 3, background: { r: 10, g: 10, b: 20 } },

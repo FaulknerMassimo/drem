@@ -37,6 +37,17 @@ export async function openaiChat(
     temperature: request.temperature,
     max_tokens: request.maxTokens,
   };
+  if (request.tools?.length) {
+    body.tools = request.tools.map((tool) => ({
+      type: "function",
+      function: {
+        name: tool.name,
+        description: tool.description,
+        parameters: tool.parameters,
+      },
+    }));
+    body.tool_choice = "auto";
+  }
   if (request.json) body.response_format = { type: "json_object" };
 
   const payload = await requestJson(
@@ -55,11 +66,13 @@ export async function openaiChat(
   const first = asRecord(choices[0]);
   const message = asRecord(first.message);
   const text = typeof message.content === "string" ? message.content : "";
-  if (!text) throw new ProviderError("The provider returned an empty completion");
+  const toolCalls = readOpenAiToolCalls(message.tool_calls);
+  if (!text && toolCalls.length === 0) throw new ProviderError("The provider returned an empty completion");
 
   const usage = asRecord(record.usage);
   return {
     text,
+    toolCalls: toolCalls.length > 0 ? toolCalls : undefined,
     inputTokens: numberOrUndefined(usage.prompt_tokens),
     outputTokens: numberOrUndefined(usage.completion_tokens),
   };
@@ -141,6 +154,20 @@ export async function openaiEmbed(
 function serialiseOpenAiMessages(request: ChatRequest): unknown[] {
   const lastUser = lastUserIndex(request.messages);
   return request.messages.map((message, index) => {
+    if (message.role === "assistant" && message.toolCalls?.length) {
+      return {
+        role: "assistant",
+        content: message.content || null,
+        tool_calls: message.toolCalls.map((call) => ({
+          id: call.id,
+          type: "function",
+          function: { name: call.name, arguments: JSON.stringify(call.arguments) },
+        })),
+      };
+    }
+    if (message.role === "tool") {
+      return { role: "tool", tool_call_id: message.toolCallId, content: message.content };
+    }
     if (index !== lastUser || !request.images?.length) {
       return { role: message.role, content: message.content };
     }
@@ -156,6 +183,28 @@ function serialiseOpenAiMessages(request: ChatRequest): unknown[] {
         })),
       ],
     };
+  });
+}
+
+function readOpenAiToolCalls(value: unknown): import("../types").ToolCall[] {
+  if (!Array.isArray(value)) return [];
+  return value.flatMap((entry, index) => {
+    const record = asRecord(entry);
+    const fn = asRecord(record.function);
+    if (typeof fn.name !== "string" || !fn.name) return [];
+    let args: unknown = fn.arguments;
+    if (typeof fn.arguments === "string") {
+      try {
+        args = JSON.parse(fn.arguments);
+      } catch {
+        args = null;
+      }
+    }
+    return [{
+      id: typeof record.id === "string" && record.id ? record.id : `call_${index}`,
+      name: fn.name,
+      arguments: args,
+    }];
   });
 }
 

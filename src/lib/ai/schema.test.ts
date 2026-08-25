@@ -15,13 +15,14 @@ describe("AI config parsing", () => {
     expect(config.roles.extraction).toBeNull();
   });
 
-  it("fills capture roles when an older config blob omits them", () => {
+  it("fills newer roles when an older config blob omits them", () => {
     const parsed = parseAiConfig({
       providers: [{ id: "a", kind: "ollama", name: "Ollama", baseUrl: "", enabled: true }],
       roles: { extraction: null, lucidity: null, symbolic: null, report: null },
     });
     expect(parsed.roles.ocr).toBeNull();
     expect(parsed.roles.split).toBeNull();
+    expect(parsed.roles.chat).toBeNull();
   });
 
   it("fills in a missing base URL from the kind default", () => {

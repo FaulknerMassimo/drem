@@ -48,6 +48,7 @@ export default async function AppLayout({
     {
       label: "Journal",
       items: [
+        { href: "/chat", label: "Chat" },
         { href: "/journal", label: "All entries", match: ["/dream"] },
         { href: "/search", label: "Search" },
       ],

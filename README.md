@@ -18,7 +18,7 @@ The app is organised by when each part is useful:
 | Area | What it is for |
 | --- | --- |
 | **Write** | Record tonight, capture quickly, finish drafts, or import existing material |
-| **Journal** | Browse and filter every entry, search by meaning, and find similar dreams |
+| **Journal** | Chat with the archive, browse every entry, search by meaning, and find similar dreams |
 | **Patterns** | Review recurring dream signs, statistics, and longer-period reports |
 | **System** | Configure model providers, export or restore backups, and manage recovery codes |
 
@@ -44,6 +44,10 @@ to add in daylight.
 - **Dream signs and semantic search.** Find entries with similar meaning,
   discover recurring people, places, and impossible details, and compare each
   sign's lucid rate with the archive's baseline.
+- **Private journal chat.** Talk naturally with a configured model that can
+  inspect dreams, nights, notes, signs, tags, saved reports, exact text matches,
+  activity, and technique statistics through validated read-only tools. Only
+  the final transcript is saved, encrypted; tool traces stay in memory.
 - **Optional AI insights.** Assign local or remote providers separately to
   extraction, coaching, symbolic reading, reports, capture, and semantic roles.
   Every remote request names its destination before any dream leaves the
@@ -111,6 +115,12 @@ Deliberately **not** encrypted, with the reasoning:
 | Tag and dream-sign fingerprints | Grouping and filtering must run in SQL | That two entries share a tag, not which |
 | Embedding vectors *(only if `SEARCH_BACKEND=pgvector`)* | ANN indexing | Vectors are partially invertible. The default `encrypted` backend avoids this |
 | Which entries share a dream sign | Counting a sign and correlating it with lucidity must run in SQL | That two entries share a cue, not which cue |
+
+Chat titles, user messages, and model answers are encrypted. Tool calls and
+their results are never stored: they can contain complete decrypted entries and
+exist only for the duration of the model request. Chat is also subject to the
+same destination badge and explicit acknowledgement as every other remote model
+feature.
 
 ### Other hardening
 
@@ -198,6 +208,8 @@ bought by dropping to **one factor** — anyone holding the file can attack it
 offline — so it takes a real passphrase and belongs somewhere separate again.
 Restoring merges: it never deletes, never overwrites a night you have since
 rewritten, and skips entries already present, so running it twice is a no-op.
+AI-derived data and conversation transcripts are not included; insights, signs,
+embeddings, and chats can be rebuilt or started again from the restored journal.
 
 ## Installing it as an app
 

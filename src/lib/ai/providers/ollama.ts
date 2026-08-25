@@ -38,6 +38,16 @@ export async function ollamaChat(
       num_predict: request.maxTokens,
     },
   };
+  if (request.tools?.length) {
+    body.tools = request.tools.map((tool) => ({
+      type: "function",
+      function: {
+        name: tool.name,
+        description: tool.description,
+        parameters: tool.parameters,
+      },
+    }));
+  }
   /*
    * `format` takes either the string "json" or a JSON Schema, and the
    * difference is the difference between valid JSON and *usable* JSON: given
@@ -71,10 +81,12 @@ export async function ollamaChat(
   const record = asRecord(payload);
   const message = asRecord(record.message);
   const text = typeof message.content === "string" ? message.content : "";
-  if (!text) throw new ProviderError(emptyCompletionReason(record, message));
+  const toolCalls = readOllamaToolCalls(message.tool_calls);
+  if (!text && toolCalls.length === 0) throw new ProviderError(emptyCompletionReason(record, message));
 
   return {
     text,
+    toolCalls: toolCalls.length > 0 ? toolCalls : undefined,
     inputTokens: numberOrUndefined(record.prompt_eval_count),
     outputTokens: numberOrUndefined(record.eval_count),
   };
@@ -130,10 +142,34 @@ function serialiseOllamaMessages(request: ChatRequest): unknown[] {
   const lastUser = lastUserIndex(request.messages);
   return request.messages.map((message, index) => {
     const out: Record<string, unknown> = { role: message.role, content: message.content };
+    if (message.role === "assistant" && message.toolCalls?.length) {
+      out.tool_calls = message.toolCalls.map((call, callIndex) => ({
+        type: "function",
+        function: { index: callIndex, name: call.name, arguments: call.arguments },
+      }));
+    }
+    if (message.role === "tool") out.tool_name = message.toolName;
     if (index === lastUser && request.images?.length) {
       out.images = request.images.map((image) => image.bytes.toString("base64"));
     }
     return out;
+  });
+}
+
+function readOllamaToolCalls(value: unknown): import("../types").ToolCall[] {
+  if (!Array.isArray(value)) return [];
+  return value.flatMap((entry, index) => {
+    const fn = asRecord(asRecord(entry).function);
+    if (typeof fn.name !== "string" || !fn.name) return [];
+    let args: unknown = fn.arguments ?? {};
+    if (typeof args === "string") {
+      try {
+        args = JSON.parse(args);
+      } catch {
+        args = null;
+      }
+    }
+    return [{ id: `ollama_call_${index}`, name: fn.name, arguments: args }];
   });
 }
 

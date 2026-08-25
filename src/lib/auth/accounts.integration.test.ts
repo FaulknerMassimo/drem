@@ -26,6 +26,7 @@ import {
 } from "@/db/schema";
 import { decryptString, encrypt } from "@/lib/crypto/aead";
 import { emptyRoles } from "@/lib/ai/schema";
+import { saveConversationExchange } from "@/lib/ai/conversations";
 import { totp } from "@/lib/crypto/totp";
 import { tagFingerprint } from "@/lib/journal/tags";
 import { signFingerprint } from "@/lib/semantic/signs";
@@ -330,6 +331,13 @@ describe("what a stolen database actually contains", () => {
         column: "vector_enc",
         id: embeddingId,
       }),
+    });
+
+    await saveConversationExchange(userId, keys, null, {
+      user: `question about ${CANARY}`,
+      assistant: `answer grounded in ${CANARY}`,
+      provider: "Ollama",
+      model: "llama3.2",
     });
 
     await db

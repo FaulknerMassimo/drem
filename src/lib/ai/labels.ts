@@ -6,10 +6,12 @@
  */
 import {
   CAPTURE_ROLES,
+  CONVERSATION_ROLES,
   INSIGHT_ROLES,
   PROVIDER_KINDS,
   SEMANTIC_ROLES,
   type CaptureRole,
+  type ConversationRole,
   type InsightRole,
   type ModelRole,
   type ProviderKind,
@@ -55,16 +57,26 @@ export const SEMANTIC_ROLE_HINTS: Record<SemanticRole, string> = {
     "Reads across the archive for cues that keep recurring. Text only — the same model you use for reports will do.",
 };
 
+export const CONVERSATION_ROLE_LABELS: Record<ConversationRole, string> = {
+  chat: "Journal chat",
+};
+
+export const CONVERSATION_ROLE_HINTS: Record<ConversationRole, string> = {
+  chat: "Talk with a model that can inspect dreams, nights, signs, reports and statistics through read-only tools.",
+};
+
 export const MODEL_ROLE_LABELS: Record<ModelRole, string> = {
   ...INSIGHT_KIND_LABELS,
   ...CAPTURE_ROLE_LABELS,
   ...SEMANTIC_ROLE_LABELS,
+  ...CONVERSATION_ROLE_LABELS,
 };
 
 export const MODEL_ROLE_HINTS: Record<ModelRole, string> = {
   ...INSIGHT_KIND_HINTS,
   ...CAPTURE_ROLE_HINTS,
   ...SEMANTIC_ROLE_HINTS,
+  ...CONVERSATION_ROLE_HINTS,
 };
 
 export const PROVIDER_KIND_LABELS: Record<ProviderKind, string> = {
@@ -83,8 +95,10 @@ export const PROVIDER_KIND_HINTS: Record<ProviderKind, string> = {
 const roles: readonly InsightRole[] = INSIGHT_ROLES;
 const capture: readonly CaptureRole[] = CAPTURE_ROLES;
 const semantic: readonly SemanticRole[] = SEMANTIC_ROLES;
+const conversation: readonly ConversationRole[] = CONVERSATION_ROLES;
 const kinds: readonly ProviderKind[] = PROVIDER_KINDS;
 void roles;
 void capture;
 void semantic;
+void conversation;
 void kinds;

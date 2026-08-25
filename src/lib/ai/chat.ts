@@ -48,6 +48,7 @@ const MAX_TOKENS: Record<ChatRole, number> = {
    * back empty because the model was still thinking when it ran out.
    */
   signs: 16384,
+  chat: 4096,
 };
 
 const TEMPERATURE: Record<ChatRole, number> = {
@@ -59,6 +60,7 @@ const TEMPERATURE: Record<ChatRole, number> = {
   split: 0.1,
   // A dream-sign scan is a clustering job over an archive, not a creative one.
   signs: 0.2,
+  chat: 0.4,
 };
 
 /**
@@ -109,6 +111,7 @@ export async function completeRole(
     jsonSchema?: Record<string, unknown>;
     images?: ChatImage[];
     budget?: ChatBudget;
+    tools?: import("./types").ChatTool[];
   } = {},
 ): Promise<{ response: ChatResponse; destination: Destination }> {
   const destination = destinationFor(config, role);
@@ -130,6 +133,7 @@ export async function completeRole(
       jsonSchema: options.jsonSchema,
       images: options.images,
       think: THINKING[role],
+      tools: options.tools,
     },
     globalThis.fetch,
     timeoutMs,

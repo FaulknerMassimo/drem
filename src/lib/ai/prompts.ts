@@ -8,8 +8,8 @@
  */
 import type { ChatRole, InsightRole } from "./types";
 
-/** Keyed by ChatRole: `embedding` has no prompt, only a model name. */
-export const PROMPT_VERSIONS: Record<ChatRole, string> = {
+/** Journal chat owns a conversational system prompt, not a saved insight version. */
+export const PROMPT_VERSIONS: Record<Exclude<ChatRole, "chat">, string> = {
   extraction: "extraction.v1",
   lucidity: "lucidity.v1",
   symbolic: "symbolic.v1",

@@ -447,6 +447,33 @@ export async function dreamSummaries(
     .filter((summary): summary is DreamSummary => summary !== undefined);
 }
 
+/**
+ * Full entries for a bounded set of ids, preserving the caller's order.
+ *
+ * Journal chat may read several selected entries at once. Keeping that to one
+ * dream query and one tag query matters when exact text search scans a large
+ * encrypted archive in-process.
+ */
+export async function dreamRecords(
+  userId: string,
+  keys: UserKeys,
+  dreamIds: readonly string[],
+): Promise<DreamRecord[]> {
+  if (dreamIds.length === 0) return [];
+
+  const rows = await db
+    .select()
+    .from(dreams)
+    .where(and(eq(dreams.userId, userId), inArray(dreams.id, [...dreamIds])));
+  const tagsByDream = await tagsForDreams(userId, keys, rows.map((row) => row.id));
+  const byId = new Map(
+    rows.map((row) => [row.id, decodeDream(keys, row, tagsByDream.get(row.id) ?? [])]),
+  );
+  return dreamIds
+    .map((id) => byId.get(id))
+    .filter((record): record is DreamRecord => record !== undefined);
+}
+
 export async function recentDreams(
   userId: string,
   keys: UserKeys,

@@ -35,6 +35,13 @@ export async function anthropicChat(
     temperature: request.temperature,
     messages: serialiseAnthropicMessages(messages, request.images),
   };
+  if (request.tools?.length) {
+    body.tools = request.tools.map((tool) => ({
+      name: tool.name,
+      description: tool.description,
+      input_schema: tool.parameters,
+    }));
+  }
   if (system) body.system = system;
 
   const payload = await requestJson(
@@ -50,11 +57,13 @@ export async function anthropicChat(
 
   const record = asRecord(payload);
   const text = readAnthropicText(record.content);
-  if (!text) throw new ProviderError("Anthropic returned an empty completion");
+  const toolCalls = readAnthropicToolCalls(record.content);
+  if (!text && toolCalls.length === 0) throw new ProviderError("Anthropic returned an empty completion");
 
   const usage = asRecord(record.usage);
   return {
     text,
+    toolCalls: toolCalls.length > 0 ? toolCalls : undefined,
     inputTokens: numberOrUndefined(usage.input_tokens),
     outputTokens: numberOrUndefined(usage.output_tokens),
   };
@@ -87,11 +96,45 @@ function serialiseAnthropicMessages(
   images: ChatImage[] | undefined,
 ): unknown[] {
   const lastUser = lastUserIndex(messages);
-  return messages.map((message, index) => {
-    if (index !== lastUser || !images?.length) {
-      return { role: message.role, content: message.content };
+  const serialised: unknown[] = [];
+  for (let index = 0; index < messages.length; index += 1) {
+    const message = messages[index]!;
+    if (message.role === "assistant" && message.toolCalls?.length) {
+      serialised.push({
+        role: "assistant",
+        content: [
+          ...(message.content ? [{ type: "text", text: message.content }] : []),
+          ...message.toolCalls.map((call) => ({
+            type: "tool_use",
+            id: call.id,
+            name: call.name,
+            input: call.arguments,
+          })),
+        ],
+      });
+      continue;
     }
-    return {
+    if (message.role === "tool") {
+      const results: unknown[] = [];
+      let cursor = index;
+      while (messages[cursor]?.role === "tool") {
+        const result = messages[cursor]!;
+        results.push({
+          type: "tool_result",
+          tool_use_id: result.toolCallId,
+          content: result.content,
+        });
+        cursor += 1;
+      }
+      serialised.push({ role: "user", content: results });
+      index = cursor - 1;
+      continue;
+    }
+    if (index !== lastUser || !images?.length) {
+      serialised.push({ role: message.role, content: message.content });
+      continue;
+    }
+    serialised.push({
       role: message.role,
       content: [
         ...images.map((image) => ({
@@ -104,8 +147,9 @@ function serialiseAnthropicMessages(
         })),
         { type: "text", text: message.content },
       ],
-    };
-  });
+    });
+  }
+  return serialised;
 }
 
 function lastUserIndex(messages: ChatMessage[]): number {
@@ -142,6 +186,17 @@ function readAnthropicText(content: unknown): string {
     if (record.type === "text" && typeof record.text === "string") parts.push(record.text);
   }
   return parts.join("");
+}
+
+function readAnthropicToolCalls(content: unknown): import("../types").ToolCall[] {
+  if (!Array.isArray(content)) return [];
+  return content.flatMap((block) => {
+    const record = asRecord(block);
+    if (record.type !== "tool_use" || typeof record.id !== "string" || typeof record.name !== "string") {
+      return [];
+    }
+    return [{ id: record.id, name: record.name, arguments: record.input ?? {} }];
+  });
 }
 
 function readAnthropicModels(payload: unknown): string[] {

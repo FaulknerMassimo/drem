@@ -19,8 +19,9 @@
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { eq, sql } from "drizzle-orm";
 import { db } from "@/db";
-import { attachments, dreamTags, dreams, insights, nights, tags, users } from "@/db/schema";
+import { attachments, chatThreads, dreamTags, dreams, insights, nights, tags, users } from "@/db/schema";
 import { createInitialAccount } from "@/lib/auth/accounts";
+import { saveConversationExchange } from "@/lib/ai/conversations";
 import { ArchiveError, openArchive } from "@/lib/crypto/archive";
 import type { UserKeys } from "@/lib/crypto/envelope";
 import { createDream, dreamsForNight, getDream } from "@/lib/journal/dreams";
@@ -45,6 +46,8 @@ const CANARIES = {
   body: "the-clock-had-no-hands-and-the-bees-were-singing",
   notes: "slept-badly-after-the-argument-with-marguerite",
   tag: "vespertine-recursion",
+  chatQuestion: "why-does-the-vespertine-clock-keep-returning",
+  chatAnswer: "the-clock-may-be-a-recurring-transition-cue",
 };
 
 let userId: string;
@@ -58,7 +61,7 @@ async function wipeAll() {
 
 async function wipeJournal() {
   await db.execute(
-    sql`truncate table ${nights}, ${dreams}, ${tags}, ${dreamTags}, ${attachments} restart identity cascade`,
+    sql`truncate table ${nights}, ${dreams}, ${tags}, ${dreamTags}, ${attachments}, ${chatThreads} restart identity cascade`,
   );
 }
 
@@ -127,6 +130,13 @@ async function seedJournal() {
       tags: [CANARIES.tag, "flying"],
     }),
   );
+
+  await saveConversationExchange(userId, keys, null, {
+    user: CANARIES.chatQuestion,
+    assistant: CANARIES.chatAnswer,
+    provider: "Ollama",
+    model: "llama3.2",
+  });
 
   // A second night, with a night that was journalled and recalled nothing.
   await saveNight(userId, keys, nightInput({ date: "2026-08-18", noRecall: true }));

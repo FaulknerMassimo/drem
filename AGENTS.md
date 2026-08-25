@@ -131,7 +131,7 @@ src/lib/semantic/   embeddings, meaning-based search, dream signs + pure:
                     vectors, correlation, text, signs-parse
 src/lib/backup/     passphrase-sealed export and merge-restore + pure: document
 src/lib/db-environment.ts  which journal a process may write to
-src/db/schema.ts    all 15 tables, with the reasoning in comments
+src/db/schema.ts    all 17 tables, with the reasoning in comments
 src/app/(auth)/     setup, login, TOTP verify
 src/app/(app)/      everything behind a session
 src/app/(capture)/  the 3am screen, deliberately outside the app chrome

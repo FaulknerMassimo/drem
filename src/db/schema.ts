@@ -474,6 +474,43 @@ export const embeddings = pgTable(
   ],
 );
 
+/**
+ * Durable journal conversations.
+ *
+ * Only the human/assistant transcript is kept. Tool calls and their results
+ * can contain whole decrypted dreams, so they exist only in the request that
+ * is currently using them and never become a second copy of the journal.
+ */
+export const chatThreads = pgTable(
+  "chat_threads",
+  {
+    id: uuid("id").primaryKey(),
+    userId: uuid("user_id").notNull().references(() => users.id, { onDelete: "cascade" }),
+    /** Derived from the first message, and therefore encrypted as authored text. */
+    titleEnc: bytea("title_enc"),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+    updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [index("chat_threads_user_updated_idx").on(t.userId, t.updatedAt)],
+);
+
+export const chatMessages = pgTable(
+  "chat_messages",
+  {
+    id: uuid("id").primaryKey(),
+    threadId: uuid("thread_id").notNull().references(() => chatThreads.id, { onDelete: "cascade" }),
+    /** `user` or `assistant`; structural, and safe in a stolen dump. */
+    role: text("role").notNull(),
+    contentEnc: bytea("content_enc").notNull(),
+    provider: text("provider"),
+    model: text("model"),
+    inputTokens: integer("input_tokens"),
+    outputTokens: integer("output_tokens"),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [index("chat_messages_thread_created_idx").on(t.threadId, t.createdAt)],
+);
+
 // ---------------------------------------------------------------------------
 // Operations
 // ---------------------------------------------------------------------------

@@ -9,7 +9,13 @@ import { MODEL_ROLE_HINTS, MODEL_ROLE_LABELS, PROVIDER_KIND_HINTS, PROVIDER_KIND
 import { defaultUrlFor, emptyRoles } from "@/lib/ai/schema";
 import { randomUuid } from "@/lib/random-id";
 import { CSRF_FIELD } from "@/lib/security/constants";
-import { CAPTURE_ROLES, INSIGHT_ROLES, MODEL_ROLES, SEMANTIC_ROLES } from "@/lib/ai/types";
+import {
+  CAPTURE_ROLES,
+  CONVERSATION_ROLES,
+  INSIGHT_ROLES,
+  MODEL_ROLES,
+  SEMANTIC_ROLES,
+} from "@/lib/ai/types";
 import type {
   PublicAiConfig,
   PublicProvider,
@@ -177,6 +183,27 @@ export function SettingsForm({
             local and entries are indexed as you write them.
           </p>
           {SEMANTIC_ROLES.map((role) => (
+            <RoleRow
+              key={role}
+              role={role}
+              assignment={roles[role]}
+              providers={providers.filter((provider) => provider.enabled)}
+              models={models}
+              onChange={(assignment) =>
+                setRoles((current) => ({ ...current, [role]: assignment }))
+              }
+            />
+          ))}
+        </div>
+
+        <div className="space-y-4">
+          <h2 className="text-lg font-medium">Conversation role</h2>
+          <p className="text-sm text-ink-400">
+            Journal chat uses a tool-capable text model. It starts with the
+            conversation only, then reads selected journal data through
+            validated, read-only tools when the question calls for it.
+          </p>
+          {CONVERSATION_ROLES.map((role) => (
             <RoleRow
               key={role}
               role={role}
@@ -471,13 +498,14 @@ const MODEL_ROLE_PLACEHOLDERS: Record<ModelRole, string> = {
   split: "llama3.2",
   embedding: "embeddinggemma",
   signs: "llama3.2",
+  chat: "llama3.2",
 };
 
 /**
  * Fills every text role at once.
  *
- * Assigning a model to eight roles by hand is what stood between a fresh
- * install and anything working at all, and seven of the eight want the same
+ * Assigning a model to nine roles by hand is what stood between a fresh
+ * install and anything working at all, and eight of the nine want the same
  * general-purpose model anyway. Embedding and page reading are left out on
  * purpose: they need a different kind of model, and quietly pointing them at a
  * chat one produces an index that returns nothing and a page reading that
@@ -490,6 +518,7 @@ const BULK_ROLES: ModelRole[] = [
   "report",
   "split",
   "signs",
+  "chat",
 ];
 
 function assignEveryTextRole(roles: RoleMap, providerId: string, model: string): RoleMap {

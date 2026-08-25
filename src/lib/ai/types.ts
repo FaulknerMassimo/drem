@@ -36,10 +36,15 @@ export type CaptureRole = (typeof CAPTURE_ROLES)[number];
 export const SEMANTIC_ROLES = ["embedding", "signs"] as const;
 export type SemanticRole = (typeof SEMANTIC_ROLES)[number];
 
+/** The open-ended journal conversation, backed by read-only journal tools. */
+export const CONVERSATION_ROLES = ["chat"] as const;
+export type ConversationRole = (typeof CONVERSATION_ROLES)[number];
+
 export const MODEL_ROLES = [
   ...INSIGHT_ROLES,
   ...CAPTURE_ROLES,
   ...SEMANTIC_ROLES,
+  ...CONVERSATION_ROLES,
 ] as const;
 export type ModelRole = (typeof MODEL_ROLES)[number];
 
@@ -82,9 +87,28 @@ export interface PublicAiConfig {
   roles: RoleMap;
 }
 
+export interface ToolCall {
+  /** Provider-issued id when it has one; minted locally for Ollama otherwise. */
+  id: string;
+  name: string;
+  arguments: unknown;
+}
+
 export interface ChatMessage {
-  role: "system" | "user" | "assistant";
+  role: "system" | "user" | "assistant" | "tool";
   content: string;
+  /** Present on an assistant turn that asks the application to run tools. */
+  toolCalls?: ToolCall[];
+  /** Present on a tool result, matching the assistant call immediately before it. */
+  toolCallId?: string;
+  toolName?: string;
+}
+
+export interface ChatTool {
+  name: string;
+  description: string;
+  /** JSON Schema. Every execution is validated again inside drem. */
+  parameters: Record<string, unknown>;
 }
 
 /** A photographed page, attached to a chat request. Never logged. */
@@ -116,10 +140,13 @@ export interface ChatRequest {
    * Only adapters with a switch for it act on this; the rest ignore it.
    */
   think?: boolean;
+  /** Read-only application tools the model may choose to call. */
+  tools?: ChatTool[];
 }
 
 export interface ChatResponse {
   text: string;
+  toolCalls?: ToolCall[];
   inputTokens?: number;
   outputTokens?: number;
 }

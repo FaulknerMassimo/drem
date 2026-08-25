@@ -148,6 +148,43 @@ describe("Ollama adapter", () => {
     expect(result.ok).toBe(true);
     expect(result.models).toEqual(["llama3.2:latest"]);
   });
+
+  it("round-trips native tool calls and results", async () => {
+    const bodies: Record<string, unknown>[] = [];
+    const fetchImpl = vi.fn(async (_url: string | URL | Request, init?: RequestInit) => {
+      const body = JSON.parse(String(init?.body));
+      bodies.push(body);
+      if (bodies.length === 1) {
+        return jsonResponse({
+          message: {
+            content: "",
+            tool_calls: [{ function: { name: "read_dreams", arguments: { ids: ["one"] } } }],
+          },
+        });
+      }
+      return jsonResponse({ message: { content: "Grounded answer" } });
+    });
+    const tools = [{ name: "read_dreams", description: "Read dreams", parameters: { type: "object" } }];
+    const first = await ollamaChat(config, { ...chat, tools }, fetchImpl as unknown as typeof fetch);
+    expect(first.toolCalls).toEqual([
+      { id: "ollama_call_0", name: "read_dreams", arguments: { ids: ["one"] } },
+    ]);
+    await ollamaChat(config, {
+      ...chat,
+      tools,
+      messages: [
+        ...chat.messages,
+        { role: "assistant", content: "", toolCalls: first.toolCalls },
+        { role: "tool", content: "[]", toolCallId: "ollama_call_0", toolName: "read_dreams" },
+      ],
+    }, fetchImpl as unknown as typeof fetch);
+    expect(bodies[0]?.tools).toEqual(expect.any(Array));
+    expect((bodies[1]?.messages as Array<Record<string, unknown>>).at(-1)).toMatchObject({
+      role: "tool",
+      tool_name: "read_dreams",
+      content: "[]",
+    });
+  });
 });
 
 describe("OpenAI-compatible adapter", () => {
@@ -180,6 +217,31 @@ describe("OpenAI-compatible adapter", () => {
       expect((error as Error).message).not.toContain("sk-secret");
     }
   });
+
+  it("reads a tool call when a completion has no text", async () => {
+    const fetchImpl = vi.fn(async (_url: string | URL | Request, init?: RequestInit) => {
+      const body = JSON.parse(String(init?.body));
+      expect(body.tool_choice).toBe("auto");
+      expect(body.tools[0].function.name).toBe("get_journal_overview");
+      return jsonResponse({
+        choices: [{ message: {
+          content: null,
+          tool_calls: [{
+            id: "call_abc",
+            type: "function",
+            function: { name: "get_journal_overview", arguments: "{}" },
+          }],
+        } }],
+      });
+    });
+    const result = await openaiChat(config, {
+      ...chat,
+      tools: [{ name: "get_journal_overview", description: "Overview", parameters: { type: "object" } }],
+    }, fetchImpl as unknown as typeof fetch);
+    expect(result.toolCalls).toEqual([
+      { id: "call_abc", name: "get_journal_overview", arguments: {} },
+    ]);
+  });
 });
 
 describe("Anthropic adapter", () => {
@@ -210,6 +272,41 @@ describe("Anthropic adapter", () => {
     const result = await anthropicChat(config, chat, fetchImpl as unknown as typeof fetch);
     expect(result.text).toBe("a reading");
     expect(result.outputTokens).toBe(3);
+  });
+
+  it("uses Anthropic tool_use and tool_result content blocks", async () => {
+    const bodies: Record<string, unknown>[] = [];
+    const fetchImpl = vi.fn(async (_url: string | URL | Request, init?: RequestInit) => {
+      const body = JSON.parse(String(init?.body));
+      bodies.push(body);
+      if (bodies.length === 1) {
+        return jsonResponse({
+          content: [{ type: "tool_use", id: "toolu_1", name: "list_tags", input: {} }],
+          usage: {},
+        });
+      }
+      return jsonResponse({ content: [{ type: "text", text: "Tags considered" }], usage: {} });
+    });
+    const tools = [{ name: "list_tags", description: "List tags", parameters: { type: "object" } }];
+    const first = await anthropicChat(config, { ...chat, tools }, fetchImpl as unknown as typeof fetch);
+    expect(first.toolCalls).toEqual([{ id: "toolu_1", name: "list_tags", arguments: {} }]);
+    await anthropicChat(config, {
+      ...chat,
+      tools,
+      messages: [
+        ...chat.messages,
+        { role: "assistant", content: "", toolCalls: first.toolCalls },
+        { role: "tool", content: "[]", toolCallId: "toolu_1", toolName: "list_tags" },
+      ],
+    }, fetchImpl as unknown as typeof fetch);
+    expect((bodies[0]?.tools as Array<Record<string, unknown>>)[0]).toMatchObject({
+      name: "list_tags",
+      input_schema: { type: "object" },
+    });
+    expect((bodies[1]?.messages as Array<Record<string, unknown>>).at(-1)).toEqual({
+      role: "user",
+      content: [{ type: "tool_result", tool_use_id: "toolu_1", content: "[]" }],
+    });
   });
 });
 
