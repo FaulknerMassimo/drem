@@ -19,6 +19,28 @@ export function ServiceWorker() {
     if (!("serviceWorker" in navigator)) return;
 
     /*
+     * Never in development.
+     *
+     * The worker is cache-first over `/_next/static/`, which is correct for a
+     * build — those filenames carry a content hash, so changed bytes arrive at
+     * a new URL. `next dev` serves the same path with different contents, and
+     * the worker then pins the first stylesheet it ever saw: the app renders
+     * with yesterday's CSS and no amount of reloading fixes it, because the
+     * request never reaches the server. Any worker left over from a production
+     * build on this origin is unregistered rather than merely ignored — it is
+     * already installed and would keep answering.
+     */
+    if (process.env.NODE_ENV !== "production") {
+      void navigator.serviceWorker
+        .getRegistrations()
+        .then((registrations) => {
+          for (const registration of registrations) void registration.unregister();
+        })
+        .catch(() => {});
+      return;
+    }
+
+    /*
      * Service workers require a secure context, and a self-hosted instance on
      * plain HTTP over a LAN is not one — `localhost` is the exception browsers
      * make. Registering there fails anyway; this just avoids the console noise.

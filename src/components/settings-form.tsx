@@ -25,16 +25,19 @@ interface DraftProvider extends PublicProvider {
 
 export function SettingsForm({
   initial,
+  initialModels,
   csrfToken,
 }: {
   initial: PublicAiConfig;
+  /** Models already known for providers on this machine, by provider id. */
+  initialModels: Record<string, string[]>;
   csrfToken: string;
 }) {
   const [providers, setProviders] = useState<DraftProvider[]>(() =>
     initial.providers.map((provider) => ({ ...provider, apiKey: "" })),
   );
   const [roles, setRoles] = useState<RoleMap>(initial.roles);
-  const [models, setModels] = useState<Record<string, string[]>>({});
+  const [models, setModels] = useState<Record<string, string[]>>(initialModels);
 
   const [saveState, saveAction] = useActionState<SettingsFormState, FormData>(
     saveAiSettingsAction,
@@ -118,6 +121,14 @@ export function SettingsForm({
         <CsrfInput token={csrfToken} />
         <input type="hidden" name="config" value={payload} />
 
+        <BulkAssign
+          providers={providers.filter((provider) => provider.enabled)}
+          models={models}
+          onAssign={(providerId, model) =>
+            setRoles((current) => assignEveryTextRole(current, providerId, model))
+          }
+        />
+
         <div className="space-y-4">
           <h2 className="text-lg font-medium">Insight roles</h2>
           <p className="text-sm text-ink-400">
@@ -162,11 +173,8 @@ export function SettingsForm({
         <div className="space-y-4">
           <h2 className="text-lg font-medium">Semantic roles</h2>
           <p className="text-sm text-ink-400">
-            The embedding model turns entries into vectors so search can work by
-            meaning; it must be an embedding model, not a chat one. Keep it local
-            and entries are indexed as you write them — a remote one is only used
-            when you ask for it on the search page, so writing an entry never
-            sends it anywhere on its own.
+            The embedding role needs an embedding model, not a chat one. Keep it
+            local and entries are indexed as you write them.
           </p>
           {SEMANTIC_ROLES.map((role) => (
             <RoleRow
@@ -348,28 +356,212 @@ function RoleRow({
           ))}
         </select>
       </div>
-      <div>
-        <label className="label" htmlFor={`model-${role}`}>
-          Model
-        </label>
+      <ModelField
+        role={role}
+        model={assignment?.model ?? ""}
+        listed={listed}
+        disabled={!providerId}
+        onChange={(model) => {
+          if (!providerId) return;
+          onChange({ providerId, model });
+        }}
+      />
+    </div>
+  );
+}
+
+/**
+ * Pick a model, rather than remember one.
+ *
+ * This was a text box with a `datalist` behind it — which offers nothing a
+ * browser draws until you have already started typing the right answer, and
+ * was empty anyway until somebody thought to press Test connection. Where the
+ * provider's models are known they are a real list; typing stays available
+ * through "Other", because a provider that cannot be listed (any remote one,
+ * until it is tested) still has to be assignable.
+ */
+function ModelField({
+  role,
+  model,
+  listed,
+  disabled,
+  onChange,
+}: {
+  role: ModelRole;
+  model: string;
+  listed: string[];
+  disabled: boolean;
+  onChange: (model: string) => void;
+}) {
+  const known = listed.length > 0;
+  const [freeText, setFreeText] = useState(() => known && model !== "" && !listed.includes(model));
+
+  const showList = known && !freeText;
+
+  return (
+    <div>
+      <label className="label" htmlFor={`model-${role}`}>
+        Model
+      </label>
+      {showList ? (
+        <select
+          id={`model-${role}`}
+          className="field font-mono text-sm"
+          value={listed.includes(model) ? model : ""}
+          disabled={disabled}
+          onChange={(event) => {
+            if (event.target.value === OTHER_MODEL) {
+              setFreeText(true);
+              onChange("");
+              return;
+            }
+            onChange(event.target.value);
+          }}
+        >
+          <option value="">Not assigned</option>
+          {listed.map((name) => (
+            <option key={name} value={name}>
+              {name}
+            </option>
+          ))}
+          <option value={OTHER_MODEL}>Other…</option>
+        </select>
+      ) : (
         <input
           id={`model-${role}`}
           className="field font-mono text-sm"
-          list={`models-${role}`}
-          value={assignment?.model ?? ""}
-          disabled={!providerId}
-          onChange={(event) => {
-            if (!providerId) return;
-            onChange({ providerId, model: event.target.value });
-          }}
-          placeholder="llama3.2"
+          value={model}
+          disabled={disabled}
+          onChange={(event) => onChange(event.target.value)}
+          placeholder={MODEL_ROLE_PLACEHOLDERS[role]}
         />
-        <datalist id={`models-${role}`}>
-          {listed.map((name) => (
-            <option key={name} value={name} />
-          ))}
-        </datalist>
+      )}
+      {known && freeText && (
+        <button
+          type="button"
+          className="mt-1 text-xs text-ink-400 hover:text-ink-200"
+          onClick={() => {
+            setFreeText(false);
+            onChange("");
+          }}
+        >
+          Choose from installed models
+        </button>
+      )}
+    </div>
+  );
+}
+
+const OTHER_MODEL = "__other__";
+
+/**
+ * A placeholder per role, because they are not interchangeable.
+ *
+ * Every one of these boxes used to suggest `llama3.2` — including the
+ * embedding role, where a chat model produces an index that silently answers
+ * nothing, and the page-reading role, where a text-only model answers a
+ * photograph with an HTTP 400 a quarter of an hour later.
+ */
+const MODEL_ROLE_PLACEHOLDERS: Record<ModelRole, string> = {
+  extraction: "llama3.2",
+  lucidity: "llama3.2",
+  symbolic: "llama3.2",
+  report: "llama3.2",
+  ocr: "qwen2.5vl",
+  split: "llama3.2",
+  embedding: "embeddinggemma",
+  signs: "llama3.2",
+};
+
+/**
+ * Fills every text role at once.
+ *
+ * Assigning a model to eight roles by hand is what stood between a fresh
+ * install and anything working at all, and seven of the eight want the same
+ * general-purpose model anyway. Embedding and page reading are left out on
+ * purpose: they need a different kind of model, and quietly pointing them at a
+ * chat one produces an index that returns nothing and a page reading that
+ * fails with a 400.
+ */
+const BULK_ROLES: ModelRole[] = [
+  "extraction",
+  "lucidity",
+  "symbolic",
+  "report",
+  "split",
+  "signs",
+];
+
+function assignEveryTextRole(roles: RoleMap, providerId: string, model: string): RoleMap {
+  const next = { ...emptyRoles(), ...roles };
+  for (const role of BULK_ROLES) next[role] = { providerId, model };
+  return next;
+}
+
+function BulkAssign({
+  providers,
+  models,
+  onAssign,
+}: {
+  providers: DraftProvider[];
+  models: Record<string, string[]>;
+  onAssign: (providerId: string, model: string) => void;
+}) {
+  const withModels = providers.filter((provider) => (models[provider.id] ?? []).length > 0);
+  const [providerId, setProviderId] = useState(withModels[0]?.id ?? "");
+  const listed = models[providerId] ?? [];
+  const [model, setModel] = useState("");
+
+  if (withModels.length === 0) return null;
+
+  return (
+    <div className="flex flex-wrap items-end gap-3 rounded-lg border border-ink-800 bg-ink-900 p-4">
+      <div className="min-w-0 flex-1">
+        <p className="text-sm font-medium text-ink-200">Set the text roles at once</p>
+        <p className="mt-1 text-xs text-ink-400">
+          Fills extraction, lucidity, symbolic, reports, splitting and the sign
+          scan. Page reading and embedding are left alone — they need a vision
+          and an embedding model.
+        </p>
       </div>
+      {withModels.length > 1 && (
+        <select
+          aria-label="Provider"
+          className="field w-auto"
+          value={providerId}
+          onChange={(event) => {
+            setProviderId(event.target.value);
+            setModel("");
+          }}
+        >
+          {withModels.map((provider) => (
+            <option key={provider.id} value={provider.id}>
+              {provider.name}
+            </option>
+          ))}
+        </select>
+      )}
+      <select
+        aria-label="Model for every text role"
+        className="field w-auto font-mono text-sm"
+        value={model}
+        onChange={(event) => setModel(event.target.value)}
+      >
+        <option value="">Choose a model…</option>
+        {listed.map((name) => (
+          <option key={name} value={name}>
+            {name}
+          </option>
+        ))}
+      </select>
+      <button
+        type="button"
+        className="btn btn-ghost text-sm"
+        disabled={!model || !providerId}
+        onClick={() => onAssign(providerId, model)}
+      >
+        Apply
+      </button>
     </div>
   );
 }

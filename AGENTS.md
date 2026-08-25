@@ -253,6 +253,42 @@ them.
 - **`db.execute(sql\`... ${aDate} ...\`)` does not serialise a `Date`.**
   postgres.js throws `ERR_INVALID_ARG_TYPE` on it. Use the query builder
   (`db.update(...).set({ createdAt })`), which types the parameter properly.
+- **A queued job that fails must say so on the screen that asked for it.**
+  Every provider message is written to be read by the operator and is already
+  safe to persist — that is what `publicModelError` is for — but for a long
+  time only the page-reading review screen read `jobs.last_error`. Everywhere
+  else a request that could not reach the model spun for the whole retry
+  budget under "Generating…" and then reverted to its button with nothing said,
+  which is indistinguishable from never having been asked. Any new screen that
+  enqueues work reads `latestJobState` / `jobQueueSummary` and renders
+  `<JobStatus>`; a spinner with no failure state is not finished.
+- **The service worker is registered in production only.** It is cache-first
+  over `/_next/static/`, which is right for a build — those paths carry a
+  content hash — and wrong for `next dev`, which serves changed bytes at the
+  same path. It pins the first stylesheet it sees and no reload can dislodge
+  it, because the request never reaches the server: the symptom is new
+  Tailwind utilities silently doing nothing while old ones still work.
+  `ServiceWorker` unregisters any worker it finds outside production, since a
+  worker installed once keeps answering.
+- **`VALENCE_LABELS` cannot be iterated for display.** It is keyed -2…2, and
+  JavaScript puts an object's integer-like keys first in ascending order and
+  the rest in insertion order — so `Object.entries` yields Neutral, Pleasant,
+  Blissful, Nightmarish, Unpleasant, and the emotional-tone control shipped in
+  that order. Anything ordered reads from an explicit list (`VALENCE_ORDER`).
+- **A model's answer is markdown, and is never HTML.** Every chat model writes
+  `**Recurring Places:**` and numbered lists whether the prompt asks for it or
+  not, so rendering an insight or a report with `whitespace-pre-wrap` puts raw
+  asterisks on the page. `<ModelProse>` renders the small grammar they
+  actually use — headings, lists, bold, italic, code — as React nodes.
+  It must stay that way: the string is derived from something a person wrote
+  and has been through a model, so `dangerouslySetInnerHTML` and any markdown
+  library that emits HTML are both out, for the same reason the dream body is
+  rendered as text. The dream body itself stays plain: it is not markdown and
+  must never be read as any.
+- **Tailwind breakpoints are viewport-wide, not container-wide.** The sidebar
+  takes 14rem out of the middle of the page, so `lg:grid-cols-4` on a card
+  inside `<main>` is deciding on a width the cards do not have. Check what the
+  container actually gets before picking the breakpoint.
 
 ## Style
 

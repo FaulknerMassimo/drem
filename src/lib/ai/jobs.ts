@@ -8,7 +8,7 @@
  */
 import "server-only";
 import { randomUUID } from "node:crypto";
-import { and, asc, count, desc, eq, inArray, lte, sql } from "drizzle-orm";
+import { and, asc, desc, eq, inArray, lte, sql } from "drizzle-orm";
 import { db } from "@/db";
 import { jobs } from "@/db/schema";
 import { isIsoDate, type IsoDate } from "@/lib/journal/dates";
@@ -226,24 +226,6 @@ async function findOpenAttachmentJob(
   return null;
 }
 
-export async function pendingDreamJobs(
-  userId: string,
-  dreamId: string,
-): Promise<DreamInsightKind[]> {
-  const rows = await db
-    .select({ kind: jobs.kind, payload: jobs.payload })
-    .from(jobs)
-    .where(and(eq(jobs.userId, userId), inArray(jobs.status, OPEN)));
-
-  const pending: DreamInsightKind[] = [];
-  for (const row of rows) {
-    if (!isInsightJobKind(row.kind) || row.kind === "period_report") continue;
-    if (asDreamPayload(row.payload)?.dreamId !== dreamId) continue;
-    pending.push(roleForJob(row.kind) as DreamInsightKind);
-  }
-  return pending;
-}
-
 /**
  * Enqueues an embedding for one dream, or returns the already-open job.
  *
@@ -399,22 +381,137 @@ export async function openCaptureAttachmentIds(userId: string): Promise<Set<stri
   return ids;
 }
 
-export async function openJobCount(userId: string, kind: JobKind): Promise<number> {
-  const [row] = await db
-    .select({ total: count() })
-    .from(jobs)
-    .where(and(eq(jobs.userId, userId), eq(jobs.kind, kind), inArray(jobs.status, OPEN)));
-  return Number(row?.total ?? 0);
+/**
+ * What the queue is doing about one piece of work, including how it failed.
+ *
+ * The queue used to be asked only "is something in flight", which is the whole
+ * of what a screen could say for the entire retry budget: a model that cannot
+ * be reached leaves a card reading "Generating…" for five minutes and then
+ * silently back at its button, with the reason sitting unread in
+ * `jobs.last_error`. Every one of those messages was built to be shown — it
+ * names a host, a status code or a role, never a prompt — so the screens hand
+ * them to the person who can act on them.
+ */
+export interface JobState {
+  kind: JobKind;
+  status: (typeof jobs.$inferSelect)["status"];
+  attempts: number;
+  maxAttempts: number;
+  lastError: string | null;
+  /** When the next attempt is due; in the past once the retries are spent. */
+  scheduledFor: Date;
 }
 
-export async function pendingReportCount(userId: string): Promise<number> {
+function toJobState(row: {
+  kind: JobKind;
+  status: (typeof jobs.$inferSelect)["status"];
+  attempts: number;
+  lastError: string | null;
+  scheduledFor: Date;
+}): JobState {
+  return {
+    kind: row.kind,
+    status: row.status,
+    attempts: row.attempts,
+    maxAttempts: MAX_JOB_ATTEMPTS,
+    lastError: row.lastError,
+    scheduledFor: row.scheduledFor,
+  };
+}
+
+/**
+ * The most recent job of each insight kind for one dream.
+ *
+ * The newest row wins rather than the newest *open* row: a request that has
+ * exhausted its retries is precisely the one worth showing, and asking again
+ * enqueues a fresh row that supersedes it.
+ */
+export async function latestDreamJobStates(
+  userId: string,
+  dreamId: string,
+): Promise<Partial<Record<DreamInsightKind, JobState>>> {
   const rows = await db
-    .select({ id: jobs.id })
+    .select({
+      kind: jobs.kind,
+      status: jobs.status,
+      attempts: jobs.attempts,
+      lastError: jobs.lastError,
+      scheduledFor: jobs.scheduledFor,
+      payload: jobs.payload,
+      createdAt: jobs.createdAt,
+    })
     .from(jobs)
     .where(
-      and(eq(jobs.userId, userId), eq(jobs.kind, "period_report"), inArray(jobs.status, OPEN)),
-    );
-  return rows.length;
+      and(
+        eq(jobs.userId, userId),
+        inArray(jobs.kind, ["extract_insight", "lucidity_insight", "symbolic_insight"]),
+      ),
+    )
+    .orderBy(desc(jobs.createdAt));
+
+  const latest: Partial<Record<DreamInsightKind, JobState>> = {};
+  for (const row of rows) {
+    if (!isInsightJobKind(row.kind) || row.kind === "period_report") continue;
+    if (asDreamPayload(row.payload)?.dreamId !== dreamId) continue;
+    const role = roleForJob(row.kind) as DreamInsightKind;
+    latest[role] ??= toJobState({ ...row, kind: row.kind });
+  }
+  return latest;
+}
+
+/** The most recent job of one kind, whatever it is now doing. */
+export async function latestJobState(userId: string, kind: JobKind): Promise<JobState | null> {
+  const [row] = await db
+    .select({
+      kind: jobs.kind,
+      status: jobs.status,
+      attempts: jobs.attempts,
+      lastError: jobs.lastError,
+      scheduledFor: jobs.scheduledFor,
+    })
+    .from(jobs)
+    .where(and(eq(jobs.userId, userId), eq(jobs.kind, kind)))
+    .orderBy(desc(jobs.createdAt))
+    .limit(1);
+  return row ? toJobState({ ...row, kind: row.kind }) : null;
+}
+
+/**
+ * A whole batch of same-kind jobs at a glance.
+ *
+ * An embedding backfill is one job per entry, so "did it work" is a count
+ * rather than a status — and a backfill that fails on every entry otherwise
+ * shows up only as an index that never fills in.
+ */
+export interface QueueSummary {
+  open: number;
+  failed: number;
+  /** The reason from the most recent failure, if there is one. */
+  lastError: string | null;
+}
+
+export async function jobQueueSummary(userId: string, kind: JobKind): Promise<QueueSummary> {
+  const rows = await db
+    .select({
+      status: jobs.status,
+      lastError: jobs.lastError,
+      createdAt: jobs.createdAt,
+    })
+    .from(jobs)
+    .where(and(eq(jobs.userId, userId), eq(jobs.kind, kind)))
+    .orderBy(desc(jobs.createdAt));
+
+  let open = 0;
+  let failed = 0;
+  let lastError: string | null = null;
+  for (const row of rows) {
+    if (row.status === "pending" || row.status === "running") open += 1;
+    if (row.status === "failed" || row.status === "skipped") {
+      failed += 1;
+      lastError ??= row.lastError;
+    }
+  }
+  return { open, failed, lastError };
 }
 
 export async function claimNextJob(): Promise<JobRecord | null> {

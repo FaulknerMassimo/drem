@@ -66,9 +66,10 @@ export function ReportForm({
       <DestinationBadge destination={destination} />
       <FormError message={state.error} />
 
-      {pending ? (
-        <p className="text-sm text-ink-400">Generating report…</p>
-      ) : (
+      {/* No "Generating…" here: `<JobStatus>` on the page says that, and says
+          which attempt it is on and why the last one failed. Two of them said
+          less than one. */}
+      {pending ? null : (
         <>
           {destination.leavesMachine && destination.configured && (
             <label className="flex items-start gap-3 text-sm text-ink-200">

@@ -7,7 +7,7 @@ import { sessionOrRedirect } from "@/lib/auth/session";
 import { loadAiConfig } from "@/lib/ai/config";
 import { destinationsFor } from "@/lib/ai/destination";
 import { insightsForDream } from "@/lib/ai/insights";
-import { pendingDreamJobs } from "@/lib/ai/jobs";
+import { latestDreamJobStates } from "@/lib/ai/jobs";
 import { listAttachmentsForDream } from "@/lib/capture/attachments";
 import { describeDate } from "@/lib/journal/dates";
 import { getDream } from "@/lib/journal/dreams";
@@ -46,9 +46,9 @@ export default async function DreamPage({
   // Loaded once and shared: `similarDreams` needs the role assignment to know
   // which index to look in, and the badges need the destinations.
   const config = await loadAiConfig(session.userId, session.keys);
-  const [insights, pending, attached, similar, signs, csrfToken] = await Promise.all([
+  const [insights, jobStates, attached, similar, signs, csrfToken] = await Promise.all([
     insightsForDream(session.userId, session.keys, dream.id),
-    pendingDreamJobs(session.userId, dream.id),
+    latestDreamJobStates(session.userId, dream.id),
     listAttachmentsForDream(session.userId, session.keys, dream.id),
     similarDreams(session.userId, session.keys, config, dream.id),
     signsForDreams(session.userId, session.keys, [dream.id]),
@@ -175,27 +175,40 @@ export default async function DreamPage({
 
       <AttachmentGallery attachments={attached} />
 
-      <SimilarDreams hits={similar} />
-
-      {dream.body?.trim() && (
-        <SplitForm
-          dreamId={dream.id}
-          destination={destinations.split}
-          csrfToken={csrfToken}
-        />
-      )}
-
       <InsightPanel
         dreamId={dream.id}
         hasBody={Boolean(dream.body?.trim())}
         insights={insights}
-        pending={pending}
+        jobStates={jobStates}
         destinations={{
           extraction: destinations.extraction,
           lucidity: destinations.lucidity,
           symbolic: destinations.symbolic,
         }}
       />
+
+      {/* Folded away rather than dropped: splitting matters on the morning a
+          whole night went into one field, and is noise on the other 364 —
+          but which entry that is, is not something a word count can tell. */}
+      {dream.body?.trim() && (
+        <details className="group">
+          <summary className="inline-flex cursor-pointer list-none items-center gap-1 text-sm text-ink-400 hover:text-ink-200">
+            <span aria-hidden className="transition-transform group-open:rotate-90">
+              ›
+            </span>
+            Several dreams in this log?
+          </summary>
+          <div className="mt-3">
+            <SplitForm
+              dreamId={dream.id}
+              destination={destinations.split}
+              csrfToken={csrfToken}
+            />
+          </div>
+        </details>
+      )}
+
+      <SimilarDreams hits={similar} />
     </article>
   );
 }

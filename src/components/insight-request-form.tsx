@@ -38,12 +38,13 @@ export function InsightRequestForm({
       <input type="hidden" name="dreamId" value={dreamId} />
       <input type="hidden" name="kind" value={kind} />
 
-      <DestinationBadge destination={destination} />
+      {/* Compact while it stays here: three cards on one page otherwise repeat
+          the same sentence about the same local model three times over. A
+          destination that leaves the machine ignores `compact` and stays loud. */}
+      <DestinationBadge destination={destination} compact />
       <FormError message={state.error} />
 
-      {pending ? (
-        <p className="text-sm text-ink-400">Generating {label.toLowerCase()}…</p>
-      ) : (
+      {pending ? null : (
         <>
           {destination.leavesMachine && destination.configured && (
             <label className="flex items-start gap-3 text-sm text-ink-200">

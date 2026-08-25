@@ -25,6 +25,20 @@ const masterKey = randomBytes(32);
  * asserted separately below.
  */
 const FAST_KDF = { memoryCost: 19456, timeCost: 2, parallelism: 1 };
+
+/**
+ * The budget for a test that runs the production work factor.
+ *
+ * `changePassword` deliberately re-derives at `DEFAULT_KDF_PARAMS` — 512 MiB
+ * and four passes — and a test that then unlocks under the rotated parameters
+ * pays for four of those. That is one to four seconds each depending on what
+ * else the machine is doing, so the default five-second budget fails on a
+ * laptop under load and passes on the same laptop idle. Raising it only where
+ * the real cost is the point keeps the rest of the suite honest about being
+ * fast; lowering `DEFAULT_KDF_PARAMS` to suit the tests would be testing
+ * something nobody ships.
+ */
+const REAL_COST_MS = 60_000;
 const password = "correct horse battery staple";
 const dreamAad: Aad = { table: "dreams", column: "body", id: "dream-1" };
 const secret = "I noticed my hands had six fingers and realised I was dreaming.";
@@ -139,47 +153,59 @@ describe("background processing", () => {
 });
 
 describe("password change", () => {
-  it("keeps existing entries readable without re-encrypting them", async () => {
-    const { material, keys } = await provisionUser(password, masterKey, { kdfParams: FAST_KDF });
-    const ciphertext = encrypt(keys.field, secret, dreamAad);
+  it(
+    "keeps existing entries readable without re-encrypting them",
+    async () => {
+      const { material, keys } = await provisionUser(password, masterKey, { kdfParams: FAST_KDF });
+      const ciphertext = encrypt(keys.field, secret, dreamAad);
 
-    const updated = await changePassword(
-      password,
-      "a new and much longer passphrase",
-      material,
-      masterKey,
-    );
-    const rotated = { ...material, ...updated };
+      const updated = await changePassword(
+        password,
+        "a new and much longer passphrase",
+        material,
+        masterKey,
+      );
+      const rotated = { ...material, ...updated };
 
-    const reopened = await unlock(
-      "a new and much longer passphrase",
-      rotated,
-      masterKey,
-    );
-    // Same data key underneath: the untouched ciphertext still decrypts.
-    expect(decryptString(reopened.field, ciphertext, dreamAad)).toBe(secret);
-    expect(reopened.field.equals(keys.field)).toBe(true);
-  });
+      const reopened = await unlock(
+        "a new and much longer passphrase",
+        rotated,
+        masterKey,
+      );
+      // Same data key underneath: the untouched ciphertext still decrypts.
+      expect(decryptString(reopened.field, ciphertext, dreamAad)).toBe(secret);
+      expect(reopened.field.equals(keys.field)).toBe(true);
+    },
+    REAL_COST_MS,
+  );
 
-  it("invalidates the old password", async () => {
-    const { material } = await provisionUser(password, masterKey, { kdfParams: FAST_KDF });
-    const updated = await changePassword(password, "new one", material, masterKey);
-    const rotated = { ...material, ...updated };
+  it(
+    "invalidates the old password",
+    async () => {
+      const { material } = await provisionUser(password, masterKey, { kdfParams: FAST_KDF });
+      const updated = await changePassword(password, "new one", material, masterKey);
+      const rotated = { ...material, ...updated };
 
-    await expect(unwrapDek(password, rotated, masterKey)).rejects.toThrow(
-      DecryptionError,
-    );
-    expect(await verifyPassword(rotated.passwordHash, password, masterKey)).toBe(
-      false,
-    );
-  });
+      await expect(unwrapDek(password, rotated, masterKey)).rejects.toThrow(
+        DecryptionError,
+      );
+      expect(await verifyPassword(rotated.passwordHash, password, masterKey)).toBe(
+        false,
+      );
+    },
+    REAL_COST_MS,
+  );
 
-  it("refuses to rotate without the current password", async () => {
-    const { material } = await provisionUser(password, masterKey, { kdfParams: FAST_KDF });
-    await expect(
-      changePassword("guess", "new one", material, masterKey),
-    ).rejects.toThrow(DecryptionError);
-  });
+  it(
+    "refuses to rotate without the current password",
+    async () => {
+      const { material } = await provisionUser(password, masterKey, { kdfParams: FAST_KDF });
+      await expect(
+        changePassword("guess", "new one", material, masterKey),
+      ).rejects.toThrow(DecryptionError);
+    },
+    REAL_COST_MS,
+  );
 });
 
 describe("cost parameters", () => {
@@ -211,13 +237,17 @@ describe("cost parameters", () => {
     );
   });
 
-  it("upgrades to the current defaults on password change", async () => {
-    const { material } = await provisionUser(password, masterKey, {
-      kdfParams: FAST_KDF,
-    });
-    const updated = await changePassword(password, "a longer one", material, masterKey);
-    expect(updated.kdfParams).toEqual(DEFAULT_KDF_PARAMS);
-  });
+  it(
+    "upgrades to the current defaults on password change",
+    async () => {
+      const { material } = await provisionUser(password, masterKey, {
+        kdfParams: FAST_KDF,
+      });
+      const updated = await changePassword(password, "a longer one", material, masterKey);
+      expect(updated.kdfParams).toEqual(DEFAULT_KDF_PARAMS);
+    },
+    REAL_COST_MS,
+  );
 
   it("refuses parameters weaker than the floor, even from the database", async () => {
     // A tampered user row must not be able to downgrade the derivation.

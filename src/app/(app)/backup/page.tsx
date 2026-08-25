@@ -3,6 +3,7 @@ import { EXPORT_ERRORS, isExportErrorCode } from "@/lib/backup/form-state";
 import { sessionOrRedirect } from "@/lib/auth/session";
 import { MIN_PASSPHRASE_LENGTH } from "@/lib/crypto/archive";
 import { journalTotals } from "@/lib/journal/stats";
+import { Why } from "@/components/why";
 import { readCsrfToken } from "@/lib/security/csrf-server";
 
 export const dynamic = "force-dynamic";
@@ -21,13 +22,12 @@ export default async function BackupPage({
 
   return (
     <div className="space-y-8">
-      <div>
+      <div className="space-y-2">
         <h1 className="text-2xl font-semibold">Backup</h1>
-        <p className="mt-2 max-w-2xl text-sm text-ink-400">
+        <p className="max-w-2xl text-sm text-ink-400">
           {totals.dreams.toLocaleString("en-GB")} dreams across{" "}
-          {totals.nights.toLocaleString("en-GB")} nights. An archive is a
-          portable copy of all of it, readable by nothing but its passphrase —
-          keep one somewhere the machine running this cannot take with it.
+          {totals.nights.toLocaleString("en-GB")} nights, in one file readable
+          by nothing but its passphrase.
         </p>
       </div>
 
@@ -43,8 +43,7 @@ export default async function BackupPage({
       <ExportForm csrfToken={csrfToken} minPassphraseLength={MIN_PASSPHRASE_LENGTH} />
       <RestoreForm csrfToken={csrfToken} />
 
-      <section className="card space-y-3 text-sm text-ink-400">
-        <h2 className="font-medium text-ink-100">What an archive holds</h2>
+      <Why label="What an archive holds, and what it leaves out">
         <p>
           Nights, dreams, tags and their ratings — everything a person wrote.
           Insights, embeddings and dream signs are left out on purpose: all
@@ -65,7 +64,7 @@ export default async function BackupPage({
           this archive. <code className="text-ink-300">docs/BACKUP.md</code> has
           the procedure.
         </p>
-      </section>
+      </Why>
     </div>
   );
 }

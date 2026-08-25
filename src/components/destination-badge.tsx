@@ -11,10 +11,20 @@ import type { Destination } from "@/lib/ai/types";
 export function DestinationBadge({
   destination,
   what = "the dream text",
+  compact = false,
 }: {
   destination: Destination;
   /** What is about to be sent — a page, a log, or the dream itself. */
   what?: string;
+  /**
+   * Shortens the *local* badge to one line, for screens that would otherwise
+   * repeat the same sentence three or four times over.
+   *
+   * Deliberately ignored when the destination leaves this machine: that
+   * sentence is the one thing standing between a dream and somebody else's
+   * server, and it is never the thing to shorten for tidiness.
+   */
+  compact?: boolean;
 }) {
   if (!destination.configured) {
     return (
@@ -39,6 +49,17 @@ export function DestinationBadge({
         <span className="font-mono text-xs">{destination.host}</span> using{" "}
         <span className="font-mono text-xs">{destination.model}</span>. It{" "}
         <span className="text-warn-500">leaves this machine</span>.
+      </p>
+    );
+  }
+
+  if (compact) {
+    return (
+      <p role="status" className="flex flex-wrap items-center gap-1.5 text-xs text-ink-400">
+        <span className="inline-block size-1.5 rounded-full bg-ok-500" aria-hidden />
+        <span className="font-mono text-ink-300">{destination.model}</span>
+        <span>on {destination.providerName},</span>
+        <span className="text-ok-500">this machine</span>
       </p>
     );
   }

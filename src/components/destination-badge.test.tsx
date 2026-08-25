@@ -43,6 +43,33 @@ describe("destination badge", () => {
     expect(html).toContain("api.anthropic.com");
   });
 
+  it("shortens a local destination when asked, without losing the model", () => {
+    const html = renderToStaticMarkup(
+      <DestinationBadge destination={destination({})} compact />,
+    );
+    expect(html).toContain("llama3.2");
+    expect(html).toContain("this machine");
+    expect(html).not.toContain("This will send");
+  });
+
+  it("refuses to shorten a destination that leaves the machine", () => {
+    // Compactness is for repetition on one screen. The sentence that says a
+    // dream is about to be sent somewhere else is never the repetition to cut.
+    const html = renderToStaticMarkup(
+      <DestinationBadge
+        destination={destination({
+          leavesMachine: true,
+          providerName: "Anthropic",
+          host: "api.anthropic.com",
+        })}
+        compact
+      />,
+    );
+    expect(html).toContain("This will send");
+    expect(html).toContain("leaves this machine");
+    expect(html).toContain("api.anthropic.com");
+  });
+
   it("points at settings when no model is assigned", () => {
     const html = renderToStaticMarkup(
       <DestinationBadge destination={destination({ configured: false })} />,

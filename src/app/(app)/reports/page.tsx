@@ -3,38 +3,42 @@ import { JobRefresh } from "@/components/job-refresh";
 import { ReportForm } from "@/components/report-form";
 import { loadDestinations } from "@/lib/ai/config";
 import { listReports } from "@/lib/ai/insights";
-import { pendingReportCount } from "@/lib/ai/jobs";
+import { latestJobState } from "@/lib/ai/jobs";
 import { sessionOrRedirect } from "@/lib/auth/session";
 import { addDays, formatDate, today } from "@/lib/journal/dates";
+import { JobStatus } from "@/components/job-status";
+import { ModelProse } from "@/components/model-prose";
 
 export const dynamic = "force-dynamic";
 
 export default async function ReportsPage() {
   const session = await sessionOrRedirect();
-  const [destinations, reports, pending] = await Promise.all([
+  const [destinations, reports, jobState] = await Promise.all([
     loadDestinations(session.userId, session.keys),
     listReports(session.userId, session.keys),
-    pendingReportCount(session.userId),
+    latestJobState(session.userId, "period_report"),
   ]);
+  const pending = jobState?.status === "pending" || jobState?.status === "running";
 
   const end = today();
   const start = addDays(end, -29);
 
   return (
     <div className="space-y-8">
-      <JobRefresh active={pending > 0} />
+      <JobRefresh active={pending} />
       <div>
         <h1 className="text-2xl font-semibold">Period reports</h1>
         <p className="mt-2 max-w-2xl text-sm text-ink-400">
           A rollup across a stretch of nights: recurring signs, lucidity
-          patterns, and a couple of practice suggestions. Extraction on the
-          individual entries, if you have it, is included as context.
+          patterns, and a couple of practice suggestions.
         </p>
       </div>
 
+      <JobStatus state={jobState} label="the report" />
+
       <ReportForm
         destination={destinations.report}
-        pending={pending > 0}
+        pending={pending}
         defaultStart={start}
         defaultEnd={end}
       >
@@ -58,9 +62,7 @@ export default async function ReportsPage() {
                   {report.provider} · {report.model} · {report.promptVersion}
                 </p>
               </header>
-              <div className="whitespace-pre-wrap leading-relaxed text-ink-100">
-                {report.content}
-              </div>
+              <ModelProse text={report.content} />
             </article>
           ))
         )}

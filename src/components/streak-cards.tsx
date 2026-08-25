@@ -38,7 +38,9 @@ export function StreakCards({
   totals: JournalTotals;
 }) {
   return (
-    <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
+    /* Two up until the viewport is genuinely wide: the sidebar takes 14rem
+       out of the middle, so four across a `lg` screen wrapped every label. */
+    <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
       <StreakCard
         title="Recall streak"
         streak={streaks.recall}

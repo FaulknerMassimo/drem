@@ -5,6 +5,7 @@ import { JobRefresh } from "@/components/job-refresh";
 import { StackReadForm } from "@/components/stack-read-form";
 import { sessionOrRedirect } from "@/lib/auth/session";
 import { loadDestinations } from "@/lib/ai/config";
+import { attachmentJobProgress } from "@/lib/ai/jobs";
 import { listStacks } from "@/lib/capture/attachments";
 import { nightDateFor } from "@/lib/journal/dates";
 import { readCsrfToken } from "@/lib/security/csrf-server";
@@ -24,13 +25,29 @@ export default async function ImportPage() {
     (stack) => stack.status === "pending" || stack.status === "running",
   );
 
+  /*
+   * Why a reading gave up, on the list rather than only inside the review
+   * screen. "reading failed" on its own sends the writer into a page they
+   * then have to read to find out that Ollama was not running — and a stack
+   * that failed for a reason they can fix is the one they most need to see.
+   */
+  const failures = new Map<string, string>();
+  await Promise.all(
+    waiting
+      .filter((stack) => stack.status === "failed" || stack.status === "skipped")
+      .map(async (stack) => {
+        const progress = await attachmentJobProgress(session.userId, stack.leadId);
+        if (progress?.lastError) failures.set(stack.id, progress.lastError);
+      }),
+  );
+
   return (
     <div className="space-y-8">
       <div>
         <h1 className="text-2xl font-semibold">Import</h1>
         <p className="mt-2 max-w-2xl text-sm text-ink-400">
-          Photograph a handwritten page, dictate a memo, or bring in a file.
-          Nothing becomes a journal entry until you confirm it.
+          Photograph a page, dictate a memo, or bring in a file. Nothing becomes
+          an entry until you confirm it.
         </p>
       </div>
 
@@ -63,8 +80,13 @@ export default async function ImportPage() {
                 >
                   <span className="text-sm text-ink-200">
                     {describe(stack.kind, stack.pages.length)}
-                    <span className="ml-2 text-xs text-ink-400">
+                    <span
+                      className={`ml-2 text-xs ${
+                        failures.has(stack.id) ? "text-danger-500" : "text-ink-400"
+                      }`}
+                    >
                       {statusLabel(stack.status, stack.dreams.length)}
+                      {failures.has(stack.id) && ` — ${failures.get(stack.id)}`}
                     </span>
                   </span>
                   <span className="text-sm text-lucid-300">Review</span>

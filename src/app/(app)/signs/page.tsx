@@ -2,7 +2,9 @@ import { JobRefresh } from "@/components/job-refresh";
 import { AddSignForm, SignScanForm } from "@/components/sign-forms";
 import { SignList } from "@/components/sign-list";
 import { loadDestinations } from "@/lib/ai/config";
-import { openJobCount } from "@/lib/ai/jobs";
+import { latestJobState } from "@/lib/ai/jobs";
+import { JobStatus } from "@/components/job-status";
+import { Why } from "@/components/why";
 import { sessionOrRedirect } from "@/lib/auth/session";
 import { addDays, today } from "@/lib/journal/dates";
 import { journalTotals } from "@/lib/journal/stats";
@@ -38,9 +40,10 @@ export default async function SignsPage({
       baseline: totals.lucidRate,
     }),
     loadDestinations(session.userId, session.keys),
-    openJobCount(session.userId, "detect_dream_signs"),
+    latestJobState(session.userId, "detect_dream_signs"),
     readCsrfToken(),
   ]);
+  const scanning = pending?.status === "pending" || pending?.status === "running";
 
   const ranked = rankSigns(signs, sort);
   const returnTo = `/signs${includeDismissed ? "?dismissed=1" : ""}`;
@@ -49,17 +52,23 @@ export default async function SignsPage({
 
   return (
     <div className="space-y-8">
-      <JobRefresh active={pending > 0} />
+      <JobRefresh active={scanning} />
 
-      <div>
+      <div className="space-y-2">
         <h1 className="text-2xl font-semibold">Dream signs</h1>
-        <p className="mt-2 max-w-2xl text-sm text-ink-400">
-          The cues that keep coming back. Recognising one from inside a dream is
-          what triggers a reality check, so the useful question is not how often
-          a cue appears but whether appearing changes the odds — every ratio here
-          is against your own lucid rate of{" "}
-          {Math.round(totals.lucidRate * 100)}%.
+        <p className="max-w-2xl text-sm text-ink-400">
+          The cues that keep coming back, each measured against your own lucid
+          rate of {Math.round(totals.lucidRate * 100)}%.
         </p>
+        <Why>
+          <p>
+            Recognising a cue from inside a dream is what triggers a reality
+            check, so the useful question is not how often a cue appears but
+            whether appearing changes the odds. A sign that shows up in half
+            your dreams and never with lucidity is not a dream sign; one that
+            appears six times and was lucid twice is.
+          </p>
+        </Why>
       </div>
 
       <div className="flex flex-wrap items-center gap-4 text-sm">
@@ -93,9 +102,11 @@ export default async function SignsPage({
         }
       />
 
+      <JobStatus state={pending} label="the scan" />
+
       <SignScanForm
         destination={destinations.signs}
-        pending={pending > 0}
+        pending={scanning}
         defaultStart={start}
         defaultEnd={end}
         csrfToken={csrfToken}

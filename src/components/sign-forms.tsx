@@ -77,9 +77,8 @@ export function SignScanForm({
       <DestinationBadge destination={destination} what="those entries" />
       <FormError message={state.error} />
 
-      {pending ? (
-        <p className="text-sm text-ink-400">Scanning…</p>
-      ) : (
+      {/* See `report-form.tsx`: the page's `<JobStatus>` owns this sentence. */}
+      {pending ? null : (
         <>
           {destination.leavesMachine && destination.configured && (
             <label className="flex items-start gap-3 text-sm text-ink-200">

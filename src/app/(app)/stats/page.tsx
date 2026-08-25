@@ -264,7 +264,7 @@ export default async function StatsPage({
             you left unrated are absent rather than counted as zero.
           </p>
         </div>
-        <div className="grid gap-6 lg:grid-cols-3">
+        <div className="grid gap-6">
           {(
             [
               ["Vividness", (bucket: Bucket) => bucket.vividness],
@@ -288,6 +288,7 @@ export default async function StatsPage({
                 formatTick={(value) => String(value)}
                 label={`Mean ${name.toLowerCase()} per ${granularity} across ${periodName}`}
                 colour="var(--color-lucid-300)"
+                short
               />
             </div>
           ))}

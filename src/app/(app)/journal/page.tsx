@@ -1,7 +1,6 @@
 import { DreamList } from "@/components/dream-list";
 import { JournalFilterBar } from "@/components/journal-filters";
 import { sessionOrRedirect } from "@/lib/auth/session";
-import { nightDateFor } from "@/lib/journal/dates";
 import { listDreams } from "@/lib/journal/dreams";
 import { listTagCounts } from "@/lib/journal/tags";
 import { filtersToQuery, parseFilters } from "@/lib/journal/validation";
@@ -30,17 +29,12 @@ export default async function JournalPage({
 
   return (
     <div className="space-y-6">
-      <div className="flex flex-wrap items-center justify-between gap-3">
-        <div>
-          <h1 className="text-2xl font-semibold">Journal</h1>
-          <p className="mt-1 text-sm text-ink-400">
-            {page.total} entr{page.total === 1 ? "y" : "ies"}
-            {filters.tag && ` tagged #${filters.tag}`}
-          </p>
-        </div>
-        <a href={`/dream/new?date=${nightDateFor()}`} className="btn btn-primary">
-          New entry
-        </a>
+      <div>
+        <h1 className="text-2xl font-semibold">Journal</h1>
+        <p className="mt-1 text-sm text-ink-400">
+          {page.total} entr{page.total === 1 ? "y" : "ies"}
+          {filters.tag && ` tagged #${filters.tag}`}
+        </p>
       </div>
 
       <JournalFilterBar filters={filters} tags={tags} />

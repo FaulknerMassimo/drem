@@ -98,6 +98,34 @@ Deviations from the original plan, all deliberate:
   offline; the real alternative was losing the dream. Bounded by a cap, by
   deleting each entry the moment the server confirms it, and by showing the
   count on screen.
+- **A model call that fails says so where it was asked for.** The queue always
+  recorded why — `jobs.last_error` holds a sentence written for the operator,
+  naming a host or a status and never a prompt — but only the page-reading
+  review screen ever read it. Everywhere else three attempts over about five
+  minutes ran behind the word "Generating…" and then put the button back with
+  nothing said, so an unreachable Ollama, a model tag with a typo in it and a
+  role nobody had assigned all looked identical to each other and to nothing
+  happening at all. That, rather than anything about the models, is what "the
+  AI features are broken" meant.
+- **Roles are picked from the models the provider has.** Assigning eight roles
+  by typing exact model tags from memory was the whole of the setup, and a typo
+  did not fail at the point of typing — it failed inside a job, silently, per
+  the entry above. A local provider is asked what it has installed when the
+  page renders, and the roles become lists; free text stays for anything that
+  cannot be listed. Only *local* providers are asked without being told to,
+  which is the same rule the embedding role already follows: listing a remote
+  provider's models on every visit is an unprompted request to somebody else's
+  server.
+- **Navigation is grouped by when it is reached for.** Ten links of equal
+  weight with no current-page marker put "write up last night" beside "restore
+  a backup". The sidebar groups them Write / Journal / Patterns / System, which
+  is the journal's own rhythm, and marks where you are.
+- **The badge shortens only when the dream stays here.** One entry showed the
+  same sentence about the same local model four times over. A local
+  destination collapses to one line; a destination that leaves the machine
+  ignores `compact` entirely and keeps the full sentence and its
+  acknowledgement, because that is the sentence the whole scheme exists for.
+  `destination-badge.test.tsx` pins it.
 
 ## Security model
 
@@ -150,6 +178,14 @@ current one's tests pass.
       passphrase-sealed export and merge-restore, `docs/BACKUP.md`. Period
       reports already shipped in phase 3. Verified end to end over HTTP against
       a live database seeded with 400 days of nights.
+- [x] **7 — Make it usable daily.** Queue failures surfaced on every screen
+      that enqueues work, model roles assigned from the provider's own list,
+      grouped sidebar navigation with a current-page marker, the entry editor's
+      six ratings as one-click rows instead of six dropdowns, and the
+      explanatory prose folded behind `<Why>` on the screens that opened with
+      several paragraphs of it. Verified end to end over HTTP against a live
+      database and a local Ollama, including the failure path with the model
+      server stopped.
 
 ## Data model notes
 

@@ -2,7 +2,7 @@ import { Heatmap } from "@/components/heatmap";
 import { DreamList } from "@/components/dream-list";
 import { StreakCards } from "@/components/streak-cards";
 import { sessionOrRedirect } from "@/lib/auth/session";
-import { nightDateFor, today } from "@/lib/journal/dates";
+import { today } from "@/lib/journal/dates";
 import { countDrafts, recentDreams } from "@/lib/journal/dreams";
 import { calendarYear, trailingYear } from "@/lib/journal/heatmap";
 import { activityBetween, journalTotals, journalledYears } from "@/lib/journal/stats";
@@ -42,17 +42,10 @@ export default async function DashboardPage({
 
   return (
     <div className="space-y-8">
-      <div className="flex flex-wrap items-center justify-between gap-3">
-        <h1 className="text-2xl font-semibold">Your journal</h1>
-        <div className="flex gap-3">
-          <a href={`/dream/new?date=${nightDateFor(now)}`} className="btn btn-primary">
-            New entry
-          </a>
-          <a href="/capture" className="btn btn-ghost">
-            Capture
-          </a>
-        </div>
-      </div>
+      {/* No New entry / Capture buttons here: both live in the sidebar on
+          every screen, and a second copy on the one screen you land on made
+          the page look like that was the only place to start from. */}
+      <h1 className="text-2xl font-semibold">Your journal</h1>
 
       {drafts > 0 && (
         <a

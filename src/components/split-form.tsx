@@ -31,11 +31,9 @@ export function SplitForm({
 
   return (
     <section className="card space-y-4">
-      <h2 className="font-medium">Several dreams in this log?</h2>
       <p className="text-sm text-ink-400">
-        If this entry is a whole night dumped into one field, a model can
-        propose the seams. You edit and confirm; the first piece stays on this
-        entry and the rest become new ones on the same night.
+        A model proposes the seams; you edit and confirm. The first piece stays
+        on this entry, the rest become new entries on the same night.
       </p>
 
       {proposal && proposal.length > 0 ? (

@@ -72,6 +72,17 @@ function round(value: number): number {
 const WIDTH = 640;
 const HEIGHT = 150;
 
+/**
+ * A shorter plot for a chart that is one of several stacked together.
+ *
+ * The `viewBox` fixes the aspect ratio, so a chart in a narrow column is drawn
+ * short as well as narrow: three of these side by side came out 47 pixels tall
+ * with axis labels scaled down to about three, which reads as a broken
+ * sparkline rather than a trend. They are full width now, and shorter on
+ * purpose so three of them still fit on a screen.
+ */
+const SHORT_HEIGHT = 96;
+
 export interface TrendPoint {
   /** Bucket start; the React key and the tooltip's anchor. */
   key: string;
@@ -97,6 +108,7 @@ export function TrendChart({
   formatTick,
   label,
   colour = "var(--color-lucid-400)",
+  short = false,
 }: {
   points: readonly TrendPoint[];
   min?: number;
@@ -106,8 +118,11 @@ export function TrendChart({
   /** Read out in place of the drawing, which a screen reader cannot use. */
   label: string;
   colour?: string;
+  /** Draws at a shallower height, for a chart stacked with others. */
+  short?: boolean;
 }) {
-  const scale: ChartScale = { width: WIDTH, height: HEIGHT, min, max, count: points.length };
+  const height = short ? SHORT_HEIGHT : HEIGHT;
+  const scale: ChartScale = { width: WIDTH, height, min, max, count: points.length };
   const values = points.map((point) => point.value);
   const path = linePath(values, scale);
   const drawn = points.filter((point) => point.value !== null);
@@ -123,7 +138,7 @@ export function TrendChart({
   return (
     <figure className="space-y-1">
       <svg
-        viewBox={`0 0 ${WIDTH} ${HEIGHT}`}
+        viewBox={`0 0 ${WIDTH} ${height}`}
         // Scales to the card's width while keeping strokes proportional.
         className="h-auto w-full overflow-visible"
         role="img"
@@ -170,7 +185,7 @@ export function TrendChart({
           <g key={point.key}>
             <circle
               cx={pointX(index, scale)}
-              cy={point.value === null ? HEIGHT : pointY(point.value, scale)}
+              cy={point.value === null ? height : pointY(point.value, scale)}
               r={point.value === null ? 0 : 2.5}
               fill={colour}
             />
@@ -178,7 +193,7 @@ export function TrendChart({
               x={pointX(index, scale) - WIDTH / Math.max(points.length, 1) / 2}
               y={0}
               width={WIDTH / Math.max(points.length, 1)}
-              height={HEIGHT}
+              height={height}
               fill="transparent"
             >
               <title>{point.title}</title>

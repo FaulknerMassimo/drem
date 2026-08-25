@@ -6,6 +6,7 @@ import { FormError } from "@/components/form-error";
 import { SubmitButton } from "@/components/submit-button";
 import { indexJournalAction } from "@/lib/semantic/actions";
 import type { IndexFormState } from "@/lib/semantic/form-state";
+import type { QueueSummary } from "@/lib/ai/jobs";
 import type { Destination } from "@/lib/ai/types";
 import type { IndexCoverage } from "@/lib/semantic/embeddings";
 import { CSRF_FIELD } from "@/lib/security/constants";
@@ -21,15 +22,15 @@ export function IndexStatus({
   coverage,
   destination,
   model,
-  pending,
+  queue,
   csrfToken,
 }: {
   coverage: IndexCoverage;
   destination: Destination;
   /** The embedding model the index was built with, if one is assigned. */
   model: string | null;
-  /** Embedding jobs still in the queue. */
-  pending: number;
+  /** Embedding jobs still in the queue, and the ones that gave up. */
+  queue: QueueSummary;
   csrfToken: string;
 }) {
   const [state, formAction] = useActionState<IndexFormState, FormData>(
@@ -67,8 +68,21 @@ export function IndexStatus({
       <p className="text-sm text-ink-200">
         {coverage.indexed} of {coverage.embeddable} written entr
         {coverage.embeddable === 1 ? "y is" : "ies are"} indexed
-        {pending > 0 && ` · ${pending} in the queue`}.
+        {queue.open > 0 && ` · ${queue.open} in the queue`}.
       </p>
+
+      {/* An index that stops filling in is the failure this card exists to
+          make visible: search still answers, just over less of the journal. */}
+      {queue.failed > 0 && (
+        <p
+          role="alert"
+          className="rounded-lg border border-danger-500/40 bg-danger-500/10 px-3 py-2 text-sm text-ink-100"
+        >
+          {queue.failed} {queue.failed === 1 ? "entry" : "entries"} could not be
+          indexed{queue.lastError ? `: ${queue.lastError}` : ""}. Those entries
+          will not come back in a search until it succeeds.
+        </p>
+      )}
 
       {!complete && (
         <div className="h-1.5 overflow-hidden rounded-full bg-ink-800">
