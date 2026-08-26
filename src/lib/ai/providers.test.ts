@@ -1,10 +1,10 @@
 import { describe, expect, it, vi } from "vitest";
-import { ProviderError } from "./providers/errors";
-import { ollamaChat, ollamaTest } from "./providers/ollama";
-import { openaiChat } from "./providers/openai";
-import { anthropicChat } from "./providers/anthropic";
-import { providerChat, providerTest } from "./providers";
-import type { ChatRequest, ProviderConfig } from "./types";
+import { ProviderError, ProviderStallError } from "./providers/errors";
+import { ollamaChatStream, ollamaEmbed, ollamaTest } from "./providers/ollama";
+import { openaiChatStream } from "./providers/openai";
+import { anthropicChatStream } from "./providers/anthropic";
+import { providerChatStream, providerTest } from "./providers";
+import type { ChatRequest, ChatResponse, ChatStreamEvent, ProviderConfig } from "./types";
 
 const chat: ChatRequest = {
   model: "test-model",
@@ -23,6 +23,52 @@ function jsonResponse(body: unknown, status = 200): Response {
   });
 }
 
+function streamed(chunks: string[]): Response {
+  const encoder = new TextEncoder();
+  return new Response(
+    new ReadableStream<Uint8Array>({
+      start(controller) {
+        for (const chunk of chunks) controller.enqueue(encoder.encode(chunk));
+        controller.close();
+      },
+    }),
+  );
+}
+
+/** A whole Ollama answer as one finished line, which is what a short one is. */
+function ollamaReply(
+  message: Record<string, unknown>,
+  extra: Record<string, unknown> = {},
+): Response {
+  return streamed([`${JSON.stringify({ message, done: true, ...extra })}\n`]);
+}
+
+function sse(events: unknown[]): Response {
+  return streamed(events.map((event) => `data: ${JSON.stringify(event)}\n\n`));
+}
+
+/**
+ * The finished answer, the way `completeRole` assembles one.
+ *
+ * The adapters only ever stream now, and most of what is worth asserting about
+ * one is a property of the whole reply — the text, the tool calls, the token
+ * counts — rather than of the order the pieces arrived in. Assembling here
+ * keeps those tests about the adapter instead of about stream plumbing, which
+ * `stream.test.ts` covers on its own.
+ */
+async function complete(events: AsyncGenerator<ChatStreamEvent>): Promise<ChatResponse> {
+  const response: ChatResponse = { text: "" };
+  for await (const event of events) {
+    if (event.type === "text") response.text += event.delta;
+    else if (event.type === "tool_calls") response.toolCalls = event.calls;
+    else if (event.type === "usage") {
+      response.inputTokens = event.inputTokens;
+      response.outputTokens = event.outputTokens;
+    }
+  }
+  return response;
+}
+
 describe("Ollama adapter", () => {
   const config: ProviderConfig = {
     id: "ollama",
@@ -32,21 +78,19 @@ describe("Ollama adapter", () => {
     enabled: true,
   };
 
-  it("posts to /api/chat with streaming off", async () => {
+  it("posts to /api/chat and asks for the answer in pieces", async () => {
     const fetchImpl = vi.fn(async (url: string | URL | Request, init?: RequestInit) => {
       expect(String(url)).toBe("http://127.0.0.1:11434/api/chat");
       const body = JSON.parse(String(init?.body));
-      expect(body.stream).toBe(false);
+      expect(body.stream).toBe(true);
       expect(body.model).toBe("test-model");
       expect(body.format).toBeUndefined();
-      return jsonResponse({
-        message: { content: "a reading" },
-        prompt_eval_count: 10,
-        eval_count: 4,
-      });
+      return ollamaReply({ content: "a reading" }, { prompt_eval_count: 10, eval_count: 4 });
     });
 
-    const result = await ollamaChat(config, chat, fetchImpl as unknown as typeof fetch);
+    const result = await complete(
+      ollamaChatStream(config, chat, fetchImpl as unknown as typeof fetch),
+    );
     expect(result.text).toBe("a reading");
     expect(result.inputTokens).toBe(10);
   });
@@ -56,25 +100,25 @@ describe("Ollama adapter", () => {
     // can end with nothing in `content`. "Empty completion" would send the
     // operator to look at the connection instead of at the budget.
     const fetchImpl = vi.fn(async () =>
-      jsonResponse({
-        message: { content: "", thinking: "a long private chain of reasoning" },
-        done_reason: "length",
-      }),
+      ollamaReply(
+        { content: "", thinking: "a long private chain of reasoning" },
+        { done_reason: "length" },
+      ),
     );
     await expect(
-      ollamaChat(config, chat, fetchImpl as unknown as typeof fetch),
+      complete(ollamaChatStream(config, chat, fetchImpl as unknown as typeof fetch)),
     ).rejects.toThrow(/whole token budget/);
   });
 
   it("does not quote the reasoning, which is derived from the dream", async () => {
     const fetchImpl = vi.fn(async () =>
-      jsonResponse({
-        message: { content: "", thinking: "secret dream text, reconsidered" },
-        done_reason: "length",
-      }),
+      ollamaReply(
+        { content: "", thinking: "secret dream text, reconsidered" },
+        { done_reason: "length" },
+      ),
     );
     await expect(
-      ollamaChat(config, chat, fetchImpl as unknown as typeof fetch),
+      complete(ollamaChatStream(config, chat, fetchImpl as unknown as typeof fetch)),
     ).rejects.toThrow(
       expect.objectContaining({
         message: expect.not.stringContaining("secret dream text"),
@@ -86,19 +130,23 @@ describe("Ollama adapter", () => {
     const fetchImpl = vi.fn(async (_url: string | URL | Request, init?: RequestInit) => {
       const body = JSON.parse(String(init?.body));
       expect(body.format).toBe("json");
-      return jsonResponse({ message: { content: "{}" } });
+      return ollamaReply({ content: "{}" });
     });
-    await ollamaChat(config, { ...chat, json: true }, fetchImpl as unknown as typeof fetch);
+    await complete(
+      ollamaChatStream(config, { ...chat, json: true }, fetchImpl as unknown as typeof fetch),
+    );
   });
 
   it("switches reasoning off when the caller asks, and stays quiet otherwise", async () => {
     const bodies: Record<string, unknown>[] = [];
     const fetchImpl = vi.fn(async (_url: string | URL | Request, init?: RequestInit) => {
       bodies.push(JSON.parse(String(init?.body)));
-      return jsonResponse({ message: { content: "{}" } });
+      return ollamaReply({ content: "{}" });
     });
-    await ollamaChat(config, { ...chat, think: false }, fetchImpl as unknown as typeof fetch);
-    await ollamaChat(config, chat, fetchImpl as unknown as typeof fetch);
+    await complete(
+      ollamaChatStream(config, { ...chat, think: false }, fetchImpl as unknown as typeof fetch),
+    );
+    await complete(ollamaChatStream(config, chat, fetchImpl as unknown as typeof fetch));
     expect(bodies[0]?.think).toBe(false);
     // Unset means the model's own default, which is not ours to overrule.
     expect(bodies[1]).not.toHaveProperty("think");
@@ -108,15 +156,19 @@ describe("Ollama adapter", () => {
     const bodies: Record<string, unknown>[] = [];
     const fetchImpl = vi.fn(async (_url: string | URL | Request, init?: RequestInit) => {
       bodies.push(JSON.parse(String(init?.body)));
-      return jsonResponse({ message: { content: "{}" } });
+      return ollamaReply({ content: "{}" });
     });
     const schema = { type: "object", required: ["body"] };
-    await ollamaChat(
-      config,
-      { ...chat, json: true, jsonSchema: schema },
-      fetchImpl as unknown as typeof fetch,
+    await complete(
+      ollamaChatStream(
+        config,
+        { ...chat, json: true, jsonSchema: schema },
+        fetchImpl as unknown as typeof fetch,
+      ),
     );
-    await ollamaChat(config, { ...chat, json: true }, fetchImpl as unknown as typeof fetch);
+    await complete(
+      ollamaChatStream(config, { ...chat, json: true }, fetchImpl as unknown as typeof fetch),
+    );
     expect(bodies[0]?.format).toEqual(schema);
     expect(bodies[1]?.format).toBe("json");
   });
@@ -127,15 +179,17 @@ describe("Ollama adapter", () => {
       const user = body.messages.find((message: { role: string }) => message.role === "user");
       expect(user.images).toEqual([Buffer.from("page").toString("base64")]);
       expect(user.content).toBe("secret dream text");
-      return jsonResponse({ message: { content: "{}" } });
+      return ollamaReply({ content: "{}" });
     });
-    await ollamaChat(
-      config,
-      {
-        ...chat,
-        images: [{ mimeType: "image/jpeg", bytes: Buffer.from("page") }],
-      },
-      fetchImpl as unknown as typeof fetch,
+    await complete(
+      ollamaChatStream(
+        config,
+        {
+          ...chat,
+          images: [{ mimeType: "image/jpeg", bytes: Buffer.from("page") }],
+        },
+        fetchImpl as unknown as typeof fetch,
+      ),
     );
   });
 
@@ -155,29 +209,37 @@ describe("Ollama adapter", () => {
       const body = JSON.parse(String(init?.body));
       bodies.push(body);
       if (bodies.length === 1) {
-        return jsonResponse({
-          message: {
-            content: "",
-            tool_calls: [{ function: { name: "read_dreams", arguments: { ids: ["one"] } } }],
-          },
+        return ollamaReply({
+          content: "",
+          tool_calls: [{ function: { name: "read_dreams", arguments: { ids: ["one"] } } }],
         });
       }
-      return jsonResponse({ message: { content: "Grounded answer" } });
+      return ollamaReply({ content: "Grounded answer" });
     });
-    const tools = [{ name: "read_dreams", description: "Read dreams", parameters: { type: "object" } }];
-    const first = await ollamaChat(config, { ...chat, tools }, fetchImpl as unknown as typeof fetch);
+    const tools = [
+      { name: "read_dreams", description: "Read dreams", parameters: { type: "object" } },
+    ];
+    const first = await complete(
+      ollamaChatStream(config, { ...chat, tools }, fetchImpl as unknown as typeof fetch),
+    );
     expect(first.toolCalls).toEqual([
       { id: "ollama_call_0", name: "read_dreams", arguments: { ids: ["one"] } },
     ]);
-    await ollamaChat(config, {
-      ...chat,
-      tools,
-      messages: [
-        ...chat.messages,
-        { role: "assistant", content: "", toolCalls: first.toolCalls },
-        { role: "tool", content: "[]", toolCallId: "ollama_call_0", toolName: "read_dreams" },
-      ],
-    }, fetchImpl as unknown as typeof fetch);
+    await complete(
+      ollamaChatStream(
+        config,
+        {
+          ...chat,
+          tools,
+          messages: [
+            ...chat.messages,
+            { role: "assistant", content: "", toolCalls: first.toolCalls },
+            { role: "tool", content: "[]", toolCallId: "ollama_call_0", toolName: "read_dreams" },
+          ],
+        },
+        fetchImpl as unknown as typeof fetch,
+      ),
+    );
     expect(bodies[0]?.tools).toEqual(expect.any(Array));
     expect((bodies[1]?.messages as Array<Record<string, unknown>>).at(-1)).toMatchObject({
       role: "tool",
@@ -206,11 +268,11 @@ describe("OpenAI-compatible adapter", () => {
     });
 
     await expect(
-      openaiChat(config, chat, fetchImpl as unknown as typeof fetch),
+      complete(openaiChatStream(config, chat, fetchImpl as unknown as typeof fetch)),
     ).rejects.toBeInstanceOf(ProviderError);
 
     try {
-      await openaiChat(config, chat, fetchImpl as unknown as typeof fetch);
+      await complete(openaiChatStream(config, chat, fetchImpl as unknown as typeof fetch));
     } catch (error) {
       expect((error as Error).message).toBe("The provider returned HTTP 401");
       expect((error as Error).message).not.toContain("secret");
@@ -223,21 +285,41 @@ describe("OpenAI-compatible adapter", () => {
       const body = JSON.parse(String(init?.body));
       expect(body.tool_choice).toBe("auto");
       expect(body.tools[0].function.name).toBe("get_journal_overview");
-      return jsonResponse({
-        choices: [{ message: {
-          content: null,
-          tool_calls: [{
-            id: "call_abc",
-            type: "function",
-            function: { name: "get_journal_overview", arguments: "{}" },
-          }],
-        } }],
-      });
+      return sse([
+        {
+          choices: [
+            {
+              delta: {
+                tool_calls: [
+                  {
+                    index: 0,
+                    id: "call_abc",
+                    type: "function",
+                    function: { name: "get_journal_overview", arguments: "{}" },
+                  },
+                ],
+              },
+            },
+          ],
+        },
+      ]);
     });
-    const result = await openaiChat(config, {
-      ...chat,
-      tools: [{ name: "get_journal_overview", description: "Overview", parameters: { type: "object" } }],
-    }, fetchImpl as unknown as typeof fetch);
+    const result = await complete(
+      openaiChatStream(
+        config,
+        {
+          ...chat,
+          tools: [
+            {
+              name: "get_journal_overview",
+              description: "Overview",
+              parameters: { type: "object" },
+            },
+          ],
+        },
+        fetchImpl as unknown as typeof fetch,
+      ),
+    );
     expect(result.toolCalls).toEqual([
       { id: "call_abc", name: "get_journal_overview", arguments: {} },
     ]);
@@ -263,13 +345,17 @@ describe("Anthropic adapter", () => {
       const body = JSON.parse(String(init?.body));
       expect(body.system).toBe("Be brief.");
       expect(body.messages).toEqual([{ role: "user", content: "secret dream text" }]);
-      return jsonResponse({
-        content: [{ type: "text", text: "a reading" }],
-        usage: { input_tokens: 8, output_tokens: 3 },
-      });
+      return sse([
+        { type: "message_start", message: { usage: { input_tokens: 8 } } },
+        { type: "content_block_delta", index: 0, delta: { type: "text_delta", text: "a reading" } },
+        { type: "message_delta", usage: { output_tokens: 3 } },
+        { type: "message_stop" },
+      ]);
     });
 
-    const result = await anthropicChat(config, chat, fetchImpl as unknown as typeof fetch);
+    const result = await complete(
+      anthropicChatStream(config, chat, fetchImpl as unknown as typeof fetch),
+    );
     expect(result.text).toBe("a reading");
     expect(result.outputTokens).toBe(3);
   });
@@ -280,25 +366,50 @@ describe("Anthropic adapter", () => {
       const body = JSON.parse(String(init?.body));
       bodies.push(body);
       if (bodies.length === 1) {
-        return jsonResponse({
-          content: [{ type: "tool_use", id: "toolu_1", name: "list_tags", input: {} }],
-          usage: {},
-        });
+        return sse([
+          {
+            type: "content_block_start",
+            index: 0,
+            content_block: { type: "tool_use", id: "toolu_1", name: "list_tags" },
+          },
+          {
+            type: "content_block_delta",
+            index: 0,
+            delta: { type: "input_json_delta", partial_json: "{}" },
+          },
+          { type: "content_block_stop", index: 0 },
+          { type: "message_stop" },
+        ]);
       }
-      return jsonResponse({ content: [{ type: "text", text: "Tags considered" }], usage: {} });
+      return sse([
+        {
+          type: "content_block_delta",
+          index: 0,
+          delta: { type: "text_delta", text: "Tags considered" },
+        },
+        { type: "message_stop" },
+      ]);
     });
     const tools = [{ name: "list_tags", description: "List tags", parameters: { type: "object" } }];
-    const first = await anthropicChat(config, { ...chat, tools }, fetchImpl as unknown as typeof fetch);
+    const first = await complete(
+      anthropicChatStream(config, { ...chat, tools }, fetchImpl as unknown as typeof fetch),
+    );
     expect(first.toolCalls).toEqual([{ id: "toolu_1", name: "list_tags", arguments: {} }]);
-    await anthropicChat(config, {
-      ...chat,
-      tools,
-      messages: [
-        ...chat.messages,
-        { role: "assistant", content: "", toolCalls: first.toolCalls },
-        { role: "tool", content: "[]", toolCallId: "toolu_1", toolName: "list_tags" },
-      ],
-    }, fetchImpl as unknown as typeof fetch);
+    await complete(
+      anthropicChatStream(
+        config,
+        {
+          ...chat,
+          tools,
+          messages: [
+            ...chat.messages,
+            { role: "assistant", content: "", toolCalls: first.toolCalls },
+            { role: "tool", content: "[]", toolCallId: "toolu_1", toolName: "list_tags" },
+          ],
+        },
+        fetchImpl as unknown as typeof fetch,
+      ),
+    );
     expect((bodies[0]?.tools as Array<Record<string, unknown>>)[0]).toMatchObject({
       name: "list_tags",
       input_schema: { type: "object" },
@@ -359,17 +470,15 @@ describe("a text-only model sent an image", () => {
     );
 
     await expect(
-      providerChat(config, withImage, fetchImpl as unknown as typeof fetch),
+      complete(providerChatStream(config, withImage, fetchImpl as unknown as typeof fetch)),
     ).rejects.toThrow(/llama3\.2:latest cannot read images.*Settings/s);
   });
 
   it("never quotes the provider's error body", async () => {
     const fetchImpl = vi.fn(async () => jsonResponse({ error: "secret dream text" }, 400));
 
-    const error = await providerChat(
-      config,
-      withImage,
-      fetchImpl as unknown as typeof fetch,
+    const error = await complete(
+      providerChatStream(config, withImage, fetchImpl as unknown as typeof fetch),
     ).then(
       () => null,
       (thrown: unknown) => thrown,
@@ -385,10 +494,10 @@ describe("a text-only model sent an image", () => {
     const fetchImpl = vi.fn(async () => jsonResponse({ error: "bad request" }, 400));
 
     await expect(
-      providerChat(config, chat, fetchImpl as unknown as typeof fetch),
+      complete(providerChatStream(config, chat, fetchImpl as unknown as typeof fetch)),
     ).rejects.toThrow(ProviderError);
     await expect(
-      providerChat(config, chat, fetchImpl as unknown as typeof fetch),
+      complete(providerChatStream(config, chat, fetchImpl as unknown as typeof fetch)),
     ).rejects.toThrow("The provider returned HTTP 400");
   });
 
@@ -399,12 +508,12 @@ describe("a text-only model sent an image", () => {
     });
 
     await expect(
-      providerChat(config, withImage, fetchImpl as unknown as typeof fetch),
+      complete(providerChatStream(config, withImage, fetchImpl as unknown as typeof fetch)),
     ).rejects.toThrow("Could not reach 127.0.0.1:11434");
   });
 });
 
-describe("a model slower than its budget", () => {
+describe("a buffered call slower than its budget", () => {
   const config: ProviderConfig = {
     id: "ollama",
     kind: "ollama",
@@ -413,17 +522,18 @@ describe("a model slower than its budget", () => {
     enabled: true,
   };
 
-  it("says the host did not finish, and names the budget", async () => {
-    // The socket was accepted; the model was just slow. Reporting this as
-    // "Timed out waiting for 127.0.0.1:11434" sends the operator to check the
-    // connection rather than the model they assigned.
+  it("says the host did not finish, names the budget, and is not a retry", async () => {
+    // Embedding is the one call still made in a single shot -- there is nothing
+    // to stream in a vector -- so it is the one held to a total budget.
+    // Reporting this as "Timed out waiting for 127.0.0.1:11434" would send the
+    // operator to check the connection rather than the model they assigned.
     const fetchImpl = vi.fn(async () => {
       throw Object.assign(new Error("aborted"), { name: "TimeoutError" });
     });
 
-    const error = await ollamaChat(
+    const error = await ollamaEmbed(
       config,
-      chat,
+      { model: "nomic-embed-text", inputs: ["a dream"] },
       fetchImpl as unknown as typeof fetch,
       180_000,
     ).then(
@@ -434,5 +544,8 @@ describe("a model slower than its budget", () => {
     expect((error as Error).message).toBe(
       "127.0.0.1:11434 did not finish answering after 180s",
     );
+    // The model was reached and given its budget: asking again costs the same
+    // and fails in the same place.
+    expect(error).toBeInstanceOf(ProviderStallError);
   });
 });

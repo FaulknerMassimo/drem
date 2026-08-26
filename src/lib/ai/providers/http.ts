@@ -5,24 +5,47 @@
  * and make sure a failure cannot leak the request or the response. Chat APIs
  * routinely echo the prompt in error bodies, so no error body is ever read.
  */
-import { describeNetworkError, hostOfUrl, ProviderError, StreamStoppedError } from "./errors";
+import {
+  hostOfUrl,
+  networkError,
+  ProviderError,
+  ProviderStallError,
+  StreamStoppedError,
+} from "./errors";
 
 export const TEST_TIMEOUT_MS = 10_000;
 export const CHAT_TIMEOUT_MS = 120_000;
-export const REPORT_TIMEOUT_MS = 180_000;
+
+/**
+ * The ceilings on a *completion*, and what they now mean.
+ *
+ * These used to be total wall-clock budgets on a buffered call, and that shape
+ * was wrong for every one of them. A buffered request can tell you nothing
+ * until it is finished, so the only question it can answer is "has the whole
+ * answer arrived yet" — and the honest answer on a laptop running a local
+ * model over dozens of entries is "no, and it will not be for a while". Five
+ * minutes was not too little patience so much as the wrong thing being
+ * measured: the budget was timing how long the answer *is* rather than whether
+ * the machine is still working on it, then reporting a working model as a
+ * broken one and asking for the whole thing again twice.
+ *
+ * Every completion in drem now streams (`completeRole` collapses the stream
+ * back into one answer), which makes the useful question askable: silence.
+ * These numbers are the outer ceiling that stops a stream dripping forever,
+ * and they are generous because nothing else depends on them being tight —
+ * `JOB_IDLE_TIMEOUT_MS` is what actually catches a model that has stopped.
+ */
+export const REPORT_TIMEOUT_MS = 1_800_000;
 /**
  * Reading one photographed page.
  *
- * Shared the report ceiling until a measurement on the machine this was
- * written for: a 27B vision model on an Intel iGPU spends ~12s decoding the
- * image before it emits a token, then writes the transcript at ~5 tok/s, and a
- * clean printed page came to 91s. A dense handwritten one at phone resolution
- * is several times that, and 180s cut it off mid-transcript.
- *
- * Nobody is blocked on this: it is a queued job whose result lands on a page
- * that polls, the same reasoning that makes the scan ceiling generous.
+ * Measured on the machine this was written for: a 27B vision model on an Intel
+ * iGPU spends ~12s decoding the image before it emits a token, then writes the
+ * transcript at ~5 tok/s, and a clean printed page came to 91s. A dense
+ * handwritten one at phone resolution is several times that. Nobody is blocked
+ * on it either way: it is a queued job whose result lands on a page that polls.
  */
-export const OCR_TIMEOUT_MS = 300_000;
+export const OCR_TIMEOUT_MS = 900_000;
 /**
  * Splitting one log into its separate dreams.
  *
@@ -32,28 +55,23 @@ export const OCR_TIMEOUT_MS = 300_000;
  * and it scales with the entry rather than with the size of the answer -- a
  * night with four dreams in it is four dreams' worth of tokens.
  *
- * Measured on the machine this was written for, against a 2,900-character log
- * of four dreams: 200s on qwen3.5:9b, 155s on qwen3.8:27b -- both of them
- * writing ~700 tokens at 4-6 tok/s. The old default of 120s could not finish
- * either one, and cut out at the same place every time, so a night with
- * several dreams in it never split and the feature looked broken rather than
- * slow.
- *
- * This ceiling is not generous the way the OCR and scan ones are: those are
- * queued jobs nobody waits on, and a split is a form the writer is sitting in
- * front of. It buys roughly 5,000 characters of log at these rates. A longer
- * one still runs out -- but it now says so, naming the host and the budget,
- * instead of failing anonymously.
+ * Measured against a 2,900-character log of four dreams: 200s on qwen3.5:9b,
+ * 155s on qwen3.8:27b -- both writing ~700 tokens at 4-6 tok/s. This is the one
+ * ceiling still sized around a person's patience rather than a model's speed:
+ * a split is a form the writer is sitting in front of, not a queued job. It is
+ * scaled again by page count where a stack was photographed.
  */
-export const SPLIT_TIMEOUT_MS = 300_000;
+export const SPLIT_TIMEOUT_MS = 600_000;
 /** A backfill batch of a few dozen entries against a local model. */
 export const EMBED_TIMEOUT_MS = 120_000;
 /**
- * A dream-sign scan reads dozens of entries in one request, and nobody is
- * waiting on the response — it is a queued job whose result lands on a page
- * that polls. The ceiling is generous for that reason.
+ * A dream-sign scan reads dozens of entries in one request and answers with the
+ * largest token budget in the app, on a model that may reason its way there
+ * first. At the 4-6 tok/s a laptop manages, sixteen thousand tokens is most of
+ * an hour, and nobody is waiting on it: it is a queued job whose result lands
+ * on a page that polls.
  */
-export const SCAN_TIMEOUT_MS = 300_000;
+export const SCAN_TIMEOUT_MS = 3_600_000;
 
 export async function requestJson(
   url: string,
@@ -65,7 +83,7 @@ export async function requestJson(
   try {
     response = await fetchImpl(url, { ...init, signal: AbortSignal.timeout(timeoutMs) });
   } catch (error) {
-    throw new ProviderError(describeNetworkError(url, error, timeoutMs));
+    throw networkError(url, error, timeoutMs);
   }
 
   if (!response.ok) {
@@ -125,6 +143,40 @@ export function chatStreamBudget(signal?: AbortSignal): StreamBudget {
   };
 }
 
+/**
+ * The same shape for work nobody is sitting in front of.
+ *
+ * More patient than the conversation's on both counts, for the same reason the
+ * roles' ceilings are. A scan's prompt is dozens of entries, and every token of
+ * it is evaluated before a single one comes back — so the first-byte wait is
+ * covering a cold model being loaded *and* a prompt that takes minutes to read,
+ * on a machine that is also doing something else. Nothing has gone wrong during
+ * that silence, and there is nothing to show for it either; it is simply the
+ * shape of local inference on a laptop.
+ *
+ * `idleMs` is the number that matters. It is the one that says "this stopped"
+ * rather than "this is slow", and it is why the role ceilings can afford to be
+ * hours: a model that dies mid-answer is caught in two minutes regardless of
+ * how long its role was allowed.
+ */
+export const JOB_FIRST_TOKEN_TIMEOUT_MS = 900_000;
+export const JOB_IDLE_TIMEOUT_MS = 180_000;
+
+/**
+ * `totalMs` comes from the role (or the caller, where a call is sized by what
+ * it was handed). The silence budgets are clamped to it so a caller that asks
+ * for a short call gets a short one — a thirty-second title must not be able
+ * to sit waiting ten minutes for a first token.
+ */
+export function jobStreamBudget(totalMs: number, signal?: AbortSignal): StreamBudget {
+  return {
+    firstByteMs: Math.min(JOB_FIRST_TOKEN_TIMEOUT_MS, totalMs),
+    idleMs: Math.min(JOB_IDLE_TIMEOUT_MS, totalMs),
+    totalMs,
+    signal,
+  };
+}
+
 type StreamStall = "first-byte" | "idle" | "total";
 
 /**
@@ -158,7 +210,9 @@ export async function* streamLines(
   budget.signal?.addEventListener("abort", relay, { once: true });
   const fail = (error: unknown): never => {
     if (budget.signal?.aborted) throw new StreamStoppedError();
-    throw new ProviderError(describeStreamStall(url, error, stall, budget));
+    // A budget of ours expiring is a stall; anything else is the connection.
+    if (stall) throw new ProviderStallError(describeStreamStall(stall, url, budget));
+    throw networkError(url, error);
   };
 
   try {
@@ -234,18 +288,14 @@ export async function* streamLines(
  * a model that never started is a different problem from one that stopped
  * halfway, and both are different from a host that is not there at all.
  */
-function describeStreamStall(
-  url: string,
-  error: unknown,
-  stall: StreamStall | null,
-  budget: StreamBudget,
-): string {
+function describeStreamStall(stall: StreamStall, url: string, budget: StreamBudget): string {
   const host = hostOfUrl(url);
   const seconds = (ms: number) => `${Math.round(ms / 1000)}s`;
-  if (stall === "first-byte") return `${host} did not start answering within ${seconds(budget.firstByteMs)}`;
+  if (stall === "first-byte") {
+    return `${host} did not start answering within ${seconds(budget.firstByteMs)}`;
+  }
   if (stall === "idle") return `${host} stopped sending after ${seconds(budget.idleMs)} of silence`;
-  if (stall === "total") return `${host} was still answering after ${seconds(budget.totalMs)}`;
-  return describeNetworkError(url, error);
+  return `${host} was still answering after ${seconds(budget.totalMs)}`;
 }
 
 /** The sentinel OpenAI-compatible servers close a stream with. */

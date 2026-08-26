@@ -1,18 +1,17 @@
 /**
- * Dispatches a chat, embedding or connection-test call to the matching adapter.
+ * Dispatches a completion, embedding or connection-test call to its adapter.
  *
  * The only place provider kind is switched on. Callers pass a provider config
  * that already has its URL and key resolved; this module does not read the
  * environment or the database.
  */
-import { anthropicChat, anthropicChatStream, anthropicEmbed, anthropicTest } from "./anthropic";
+import { anthropicChatStream, anthropicEmbed, anthropicTest } from "./anthropic";
 import { explainImageRejection } from "./errors";
 import type { StreamBudget } from "./http";
-import { ollamaChat, ollamaChatStream, ollamaEmbed, ollamaTest } from "./ollama";
-import { openaiChat, openaiChatStream, openaiEmbed, openaiTest } from "./openai";
+import { ollamaChatStream, ollamaEmbed, ollamaTest } from "./ollama";
+import { openaiChatStream, openaiEmbed, openaiTest } from "./openai";
 import type {
   ChatRequest,
-  ChatResponse,
   ChatStreamEvent,
   ConnectionTest,
   EmbedRequest,
@@ -20,28 +19,15 @@ import type {
   ProviderConfig,
 } from "../types";
 
-export async function providerChat(
-  config: ProviderConfig,
-  request: ChatRequest,
-  fetchImpl: typeof fetch = fetch,
-  timeoutMs?: number,
-): Promise<ChatResponse> {
-  try {
-    if (config.kind === "ollama") return await ollamaChat(config, request, fetchImpl, timeoutMs);
-    if (config.kind === "openai") return await openaiChat(config, request, fetchImpl, timeoutMs);
-    return await anthropicChat(config, request, fetchImpl, timeoutMs);
-  } catch (error) {
-    // `await` above rather than a bare return, so the rejection lands here.
-    throw explainImageRejection(request.model, Boolean(request.images?.length), error);
-  }
-}
-
 /**
- * The same dispatch for a streamed answer.
+ * A completion, as the pieces of it arrive.
  *
- * Separate from `providerChat` rather than a flag on it because the two return
- * different things and the callers want different ones: a queued job wants the
- * finished text to file, and a conversation wants the pieces as they arrive.
+ * The only shape there is: `completeRole` assembles these back into one answer
+ * for the callers that want the finished text. A buffered request would be
+ * simpler to read, and it is what the queued jobs used — but it can only be
+ * held to a total wall-clock budget, which on a local model reading a whole
+ * period measures how long the answer *is* rather than whether the machine is
+ * still working, and throws away a good answer for being slow.
  */
 export async function* providerChatStream(
   config: ProviderConfig,

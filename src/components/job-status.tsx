@@ -1,4 +1,4 @@
-import type { JobState } from "@/lib/ai/jobs";
+import type { JobProgress, JobState } from "@/lib/ai/jobs";
 
 /**
  * Says what the queue is actually doing, including when it has given up.
@@ -28,6 +28,21 @@ export function JobStatus({
     return (
       <p role="status" className="text-sm text-ink-400">
         Generating {label}…
+        {state.progress ? (
+          <>
+            {" "}
+            <Progress progress={state.progress} />
+          </>
+        ) : (
+          state.status === "running" && (
+            <>
+              {" "}
+              <span className="text-ink-300">
+                The model has not started answering yet.
+              </span>
+            </>
+          )
+        )}
         {retrying && (
           <>
             {" "}
@@ -85,6 +100,23 @@ export function JobStatus({
 function Remedy({ error }: { error: string | null }) {
   if (!error) return null;
 
+  /*
+   * A model that ran out of its budget is a different problem from one that was
+   * never there, and pointing both at the connection is how an operator ends up
+   * restarting a model server that was working the whole time. These are also
+   * the failures nothing retries -- the same request would spend the same time
+   * and stop in the same place -- so the sentence has to say what to change.
+   */
+  if (/did not start answering|stopped sending|was still answering/i.test(error)) {
+    return (
+      <p className="text-xs text-ink-400">
+        The model was working but did not finish in time. It was not tried again,
+        because the same request would take just as long. Try a shorter period, a
+        smaller model, or a model that does not reason before answering.
+      </p>
+    );
+  }
+
   if (/could not reach|did not finish/i.test(error)) {
     return (
       <p className="text-xs text-ink-400">
@@ -106,6 +138,37 @@ function Remedy({ error }: { error: string | null }) {
   }
 
   return null;
+}
+
+/**
+ * Proof that the machine is still working, without quoting a word of what it
+ * wrote.
+ *
+ * The count is the point. A local model reading a season of entries can spend
+ * twenty minutes on one answer, and for all of that time a screen saying only
+ * "Generating…" is indistinguishable from a screen saying it about a job that
+ * died — which is what made a slow feature look like a broken one. A number
+ * that keeps climbing settles the question at a glance, and none of it is
+ * derived from the journal: `jobs` never sees the text, only its length.
+ */
+function Progress({ progress }: { progress: JobProgress }) {
+  const silent = Date.now() - progress.at.getTime();
+  const verb = progress.phase === "thinking" ? "Thinking" : "Writing";
+  return (
+    <span className="text-ink-300">
+      {verb} — {progress.characters.toLocaleString()} characters so far
+      {silent >= QUIET_MS ? `, quiet for ${elapsed(silent)}` : ""}.
+    </span>
+  );
+}
+
+/** Long enough that an ordinary gap between tokens is not called a silence. */
+const QUIET_MS = 15_000;
+
+function elapsed(ms: number): string {
+  const minutes = Math.round(ms / 60_000);
+  if (minutes >= 1) return `${minutes} minute${minutes === 1 ? "" : "s"}`;
+  return `${Math.round(ms / 1000)}s`;
 }
 
 /** "in about 4 minutes", or nothing once the wait is over. */

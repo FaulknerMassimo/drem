@@ -99,4 +99,10 @@ export interface CaptureProgress {
   attempts: number;
   maxAttempts: number;
   lastError: string | null;
+  /**
+   * How far the transcript has got, while it is being written. A phase and a
+   * count of characters — never a word of the page itself, which is the whole
+   * reason the reading is happening at all.
+   */
+  progress: { phase: "thinking" | "writing"; characters: number; at: Date } | null;
 }

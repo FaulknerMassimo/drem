@@ -15,6 +15,27 @@ export class ProviderError extends Error {
   }
 }
 
+/**
+ * The host answered and the model was working; it just did not finish in time.
+ *
+ * A distinct type because the *response* to it is different, not the wording.
+ * A host that cannot be reached is worth trying again: it is usually a model
+ * server that had not started yet, and the retry costs nothing. A model that
+ * was given ten minutes and spent all of them thinking is not — the next
+ * attempt is the same prompt, on the same machine, against the same model, and
+ * it will spend the same ten minutes before failing in the same place. On a
+ * laptop running local inference those attempts are not free: they are the fans
+ * coming on three times for one answer nobody is going to get.
+ *
+ * `jobs` reads this to decide whether a failure has a retry coming.
+ */
+export class ProviderStallError extends ProviderError {
+  constructor(message: string) {
+    super(message);
+    this.name = "ProviderStallError";
+  }
+}
+
 /** Hostname only — the path and query string of a failed URL are not our business. */
 export function hostOfUrl(url: string): string {
   try {
@@ -34,11 +55,24 @@ export function hostOfUrl(url: string): string {
  */
 export function describeNetworkError(url: string, error: unknown, timeoutMs?: number): string {
   const host = hostOfUrl(url);
-  if (error instanceof Error && (error.name === "TimeoutError" || error.name === "AbortError")) {
+  if (ranOutOfTime(error)) {
     const budget = timeoutMs ? ` after ${Math.round(timeoutMs / 1000)}s` : "";
     return `${host} did not finish answering${budget}`;
   }
   return `Could not reach ${host}`;
+}
+
+/** A budget the caller set expiring, rather than the connection failing. */
+export function ranOutOfTime(error: unknown): boolean {
+  return (
+    error instanceof Error && (error.name === "TimeoutError" || error.name === "AbortError")
+  );
+}
+
+/** The right class for a failed call: a stall the caller caused, or a dead host. */
+export function networkError(url: string, error: unknown, timeoutMs?: number): ProviderError {
+  const message = describeNetworkError(url, error, timeoutMs);
+  return ranOutOfTime(error) ? new ProviderStallError(message) : new ProviderError(message);
 }
 
 /**

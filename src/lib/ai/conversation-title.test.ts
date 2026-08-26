@@ -59,7 +59,7 @@ describe("what a model's reply leaves usable", () => {
 });
 
 describe("asking for a title", () => {
-  it("spends a small budget with reasoning off, and never streams", async () => {
+  it("spends a small budget with reasoning off", async () => {
     const bodies: Record<string, unknown>[] = [];
     vi.stubGlobal(
       "fetch",
@@ -76,7 +76,6 @@ describe("asking for a title", () => {
     expect(named?.destination.model).toBe("qwen3:8b");
 
     const sent = bodies[0]!;
-    expect(sent.stream).toBe(false);
     expect(sent.think).toBe(false);
     expect((sent.options as { num_predict: number }).num_predict).toBeLessThanOrEqual(32);
     vi.unstubAllGlobals();

@@ -11,7 +11,6 @@ import type {
   ChatImage,
   ChatMessage,
   ChatRequest,
-  ChatResponse,
   ChatStreamEvent,
   ConnectionTest,
   ProviderConfig,
@@ -19,7 +18,6 @@ import type {
 } from "../types";
 import { ProviderError } from "./errors";
 import {
-  CHAT_TIMEOUT_MS,
   chatStreamBudget,
   joinUrl,
   requestJson,
@@ -43,39 +41,8 @@ export async function anthropicEmbed(): Promise<never> {
   );
 }
 
-export async function anthropicChat(
-  config: ProviderConfig,
-  request: ChatRequest,
-  fetchImpl: typeof fetch = fetch,
-  timeoutMs = CHAT_TIMEOUT_MS,
-): Promise<ChatResponse> {
-  const payload = await requestJson(
-    joinUrl(config.baseUrl, "/v1/messages"),
-    {
-      method: "POST",
-      headers: anthropicHeaders(config),
-      body: JSON.stringify(anthropicBody(request, false)),
-    },
-    fetchImpl,
-    timeoutMs,
-  );
-
-  const record = asRecord(payload);
-  const text = readAnthropicText(record.content);
-  const toolCalls = readAnthropicToolCalls(record.content);
-  if (!text && toolCalls.length === 0) throw new ProviderError("Anthropic returned an empty completion");
-
-  const usage = asRecord(record.usage);
-  return {
-    text,
-    toolCalls: toolCalls.length > 0 ? toolCalls : undefined,
-    inputTokens: numberOrUndefined(usage.input_tokens),
-    outputTokens: numberOrUndefined(usage.output_tokens),
-  };
-}
-
 /**
- * The same call as Server-Sent Events.
+ * A completion, as Server-Sent Events.
  *
  * The Messages API streams *blocks* rather than a single delta channel: text,
  * reasoning and each tool call are separate numbered blocks, opened by a
@@ -100,7 +67,7 @@ export async function* anthropicChatStream(
     {
       method: "POST",
       headers: anthropicHeaders(config),
-      body: JSON.stringify(anthropicBody(request, true)),
+      body: JSON.stringify(anthropicBody(request)),
     },
     fetchImpl,
     budget,
@@ -167,7 +134,7 @@ export async function* anthropicChatStream(
   yield { type: "usage", inputTokens, outputTokens };
 }
 
-function anthropicBody(request: ChatRequest, stream: boolean): Record<string, unknown> {
+function anthropicBody(request: ChatRequest): Record<string, unknown> {
   const { system, messages } = splitSystem(request.messages);
   const body: Record<string, unknown> = {
     model: request.model,
@@ -183,7 +150,7 @@ function anthropicBody(request: ChatRequest, stream: boolean): Record<string, un
     }));
   }
   if (system) body.system = system;
-  if (stream) body.stream = true;
+  body.stream = true;
   return body;
 }
 

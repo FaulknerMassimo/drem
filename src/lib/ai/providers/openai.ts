@@ -9,7 +9,6 @@
 import type {
   ChatMessage,
   ChatRequest,
-  ChatResponse,
   ChatStreamEvent,
   ConnectionTest,
   EmbedRequest,
@@ -20,7 +19,6 @@ import type {
 import { ProviderError } from "./errors";
 import { readVector } from "./vectors";
 import {
-  CHAT_TIMEOUT_MS,
   chatStreamBudget,
   EMBED_TIMEOUT_MS,
   joinUrl,
@@ -32,42 +30,8 @@ import {
   type StreamBudget,
 } from "./http";
 
-export async function openaiChat(
-  config: ProviderConfig,
-  request: ChatRequest,
-  fetchImpl: typeof fetch = fetch,
-  timeoutMs = CHAT_TIMEOUT_MS,
-): Promise<ChatResponse> {
-  const payload = await requestJson(
-    joinUrl(config.baseUrl, "/chat/completions"),
-    {
-      method: "POST",
-      headers: openaiHeaders(config),
-      body: JSON.stringify(openaiBody(request, null)),
-    },
-    fetchImpl,
-    timeoutMs,
-  );
-
-  const record = asRecord(payload);
-  const choices = Array.isArray(record.choices) ? record.choices : [];
-  const first = asRecord(choices[0]);
-  const message = asRecord(first.message);
-  const text = typeof message.content === "string" ? message.content : "";
-  const toolCalls = readOpenAiToolCalls(message.tool_calls);
-  if (!text && toolCalls.length === 0) throw new ProviderError("The provider returned an empty completion");
-
-  const usage = asRecord(record.usage);
-  return {
-    text,
-    toolCalls: toolCalls.length > 0 ? toolCalls : undefined,
-    inputTokens: numberOrUndefined(usage.prompt_tokens),
-    outputTokens: numberOrUndefined(usage.completion_tokens),
-  };
-}
-
 /**
- * The same call as Server-Sent Events.
+ * A completion, as Server-Sent Events.
  *
  * Retried once without `stream_options` on a 400. Token counts are only
  * reported on a stream if that field is sent, and it is part of the OpenAI
@@ -203,7 +167,7 @@ function assembleOpenAiToolCalls(
   return calls;
 }
 
-function openaiBody(request: ChatRequest, stream: boolean | null): Record<string, unknown> {
+function openaiBody(request: ChatRequest, withUsage: boolean): Record<string, unknown> {
   const body: Record<string, unknown> = {
     model: request.model,
     messages: serialiseOpenAiMessages(request),
@@ -222,10 +186,8 @@ function openaiBody(request: ChatRequest, stream: boolean | null): Record<string
     body.tool_choice = "auto";
   }
   if (request.json) body.response_format = { type: "json_object" };
-  if (stream !== null) {
-    body.stream = true;
-    if (stream) body.stream_options = { include_usage: true };
-  }
+  body.stream = true;
+  if (withUsage) body.stream_options = { include_usage: true };
   return body;
 }
 

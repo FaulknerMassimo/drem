@@ -5,13 +5,12 @@
  * OpenAI-compatible shim, so a stock Ollama install works without extra flags.
  * `format: "json"` is what extraction uses to keep the model on-schema.
  *
- * Both call shapes are here: the buffered one the queued jobs use, and the
- * streamed one journal chat uses, sharing a single request body so a change to
- * how a request is built cannot apply to only one of them.
+ * Every completion is read as a stream, whether the caller wants the pieces or
+ * the finished answer, so there is one request body and one place a reply is
+ * taken apart.
  */
 import type {
   ChatRequest,
-  ChatResponse,
   ChatStreamEvent,
   ConnectionTest,
   EmbedRequest,
@@ -22,7 +21,6 @@ import type {
 import { ProviderError } from "./errors";
 import { readVectors } from "./vectors";
 import {
-  CHAT_TIMEOUT_MS,
   chatStreamBudget,
   EMBED_TIMEOUT_MS,
   joinUrl,
@@ -32,48 +30,13 @@ import {
   type StreamBudget,
 } from "./http";
 
-export async function ollamaChat(
-  config: ProviderConfig,
-  request: ChatRequest,
-  fetchImpl: typeof fetch = fetch,
-  timeoutMs = CHAT_TIMEOUT_MS,
-): Promise<ChatResponse> {
-  const payload = await requestJson(
-    joinUrl(config.baseUrl, "/api/chat"),
-    {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify(ollamaBody(request, false)),
-    },
-    fetchImpl,
-    timeoutMs,
-  );
-
-  const record = asRecord(payload);
-  const message = asRecord(record.message);
-  const text = typeof message.content === "string" ? message.content : "";
-  const toolCalls = readOllamaToolCalls(message.tool_calls, 0);
-  if (!text && toolCalls.length === 0) {
-    const thought = typeof message.thinking === "string" && message.thinking.length > 0;
-    throw new ProviderError(emptyCompletionReason(record, thought));
-  }
-
-  return {
-    text,
-    toolCalls: toolCalls.length > 0 ? toolCalls : undefined,
-    inputTokens: numberOrUndefined(record.prompt_eval_count),
-    outputTokens: numberOrUndefined(record.eval_count),
-  };
-}
-
 /**
- * The same call, streamed.
+ * A completion, streamed.
  *
- * `/api/chat` answers with one JSON object per line rather than SSE, and the
- * shape of each line is the shape of the buffered reply's `message` — so the
- * only real difference from `ollamaChat` is that `content`, `thinking` and
- * `tool_calls` arrive in pieces, and the token counts ride on the final line
- * where `done` is true.
+ * `/api/chat` answers with one JSON object per line rather than SSE, and each
+ * line has the shape a buffered reply's `message` would: `content`, `thinking`
+ * and `tool_calls` arrive in pieces, and the token counts ride on the final
+ * line, where `done` is true.
  */
 export async function* ollamaChatStream(
   config: ProviderConfig,
@@ -90,7 +53,7 @@ export async function* ollamaChatStream(
     {
       method: "POST",
       headers: { "content-type": "application/json" },
-      body: JSON.stringify(ollamaBody(request, true)),
+      body: JSON.stringify(ollamaBody(request)),
     },
     fetchImpl,
     budget,
@@ -124,11 +87,11 @@ export async function* ollamaChatStream(
   }
 }
 
-function ollamaBody(request: ChatRequest, stream: boolean): Record<string, unknown> {
+function ollamaBody(request: ChatRequest): Record<string, unknown> {
   const body: Record<string, unknown> = {
     model: request.model,
     messages: serialiseOllamaMessages(request),
-    stream,
+    stream: true,
     options: {
       temperature: request.temperature,
       num_predict: request.maxTokens,

@@ -14,6 +14,8 @@ import { getDream, dreamsInRange } from "@/lib/journal/dreams";
 import { completeRole, RoleNotConfiguredError } from "./chat";
 import { publicModelError } from "./public-error";
 import { loadAiConfig } from "./config";
+import { withProgress, type ProgressListener } from "./progress";
+import { ProviderStallError } from "./providers/errors";
 import {
   latestExtractionsForDreams,
   latestInsightForDream,
@@ -28,6 +30,7 @@ import {
   parseDreamPayload,
   parseReportPayload,
   reclaimStuckJobs,
+  recordJobProgress,
   skipJob,
   unclaimJob,
   type JobRecord,
@@ -78,6 +81,13 @@ export function kickWorker(): void {
  * twenty would have needed twenty page loads to index a year. A wall-clock
  * budget instead: it drains a whole archive in one pass against a local model,
  * and still hands the process back promptly when the model is slow or remote.
+ *
+ * It bounds when a *new* job is started, not how long the one in flight may
+ * take, so a single scan can now outlast the whole budget and hold the queue
+ * behind it for the duration. That is not worth solving with a second worker:
+ * the machine has one GPU, the model server answers one request at a time
+ * anyway, and two jobs racing for it would finish no sooner and heat the
+ * laptop just as much.
  */
 const DRAIN_BUDGET_MS = 120_000;
 const DRAIN_MAX_JOBS = 2_000;
@@ -105,7 +115,7 @@ export async function processNextJob(): Promise<DrainResult> {
   }
 
   try {
-    await runJob(job, resolved.keys);
+    await withProgress(progressWriter(job.id), () => runJob(job, resolved.keys));
     await completeJob(job.id);
     return "done";
   } catch (error) {
@@ -122,8 +132,13 @@ export async function processNextJob(): Promise<DrainResult> {
       if (stackId) await markStackStatus(job.userId, stackId, "skipped");
       return "done";
     }
-    await failJob(job.id, job.attempts, publicError(error, job.kind));
-    if (stackId && job.attempts >= 3) {
+    const outcome = await failJob(
+      job.id,
+      job.attempts,
+      publicError(error, job.kind),
+      !(error instanceof ProviderStallError),
+    );
+    if (stackId && outcome === "failed") {
       await markStackStatus(job.userId, stackId, "failed");
     }
     return "done";
@@ -137,6 +152,48 @@ class SkipError extends Error {
     super(message);
     this.name = "SkipError";
   }
+}
+
+/**
+ * How often a job in flight writes down how far it has got.
+ *
+ * Matched to the two seconds the screens poll on: writing more often than the
+ * page can show it is a row updated hundreds of times an answer for no reader.
+ */
+const PROGRESS_INTERVAL_MS = 2_000;
+
+/**
+ * Turns the stream of counts from a model call into an occasional row update.
+ *
+ * Dropped rather than queued when one is already in flight, and skipped when
+ * the last one was recent: this fires once per token, and every one of those
+ * is a database round-trip on the same machine that is running the model. A
+ * missed update is a number that stays still for two seconds; a queue of them
+ * would be the progress display competing with the inference for the laptop.
+ *
+ * A change of phase always writes, whatever the interval says. "Thinking" to
+ * "writing" is the one update that means something on its own.
+ */
+function progressWriter(jobId: string): ProgressListener {
+  let writtenAt = 0;
+  let written: string | null = null;
+  let inFlight = false;
+
+  return ({ phase, characters }) => {
+    const now = Date.now();
+    if (inFlight) return;
+    if (phase === written && now - writtenAt < PROGRESS_INTERVAL_MS) return;
+    written = phase;
+    writtenAt = now;
+    inFlight = true;
+    void recordJobProgress(jobId, phase, characters)
+      .catch(() => {
+        // Progress is advisory. A job must not fail over the note about it.
+      })
+      .finally(() => {
+        inFlight = false;
+      });
+  };
 }
 
 async function runJob(job: JobRecord, keys: UserKeys): Promise<void> {

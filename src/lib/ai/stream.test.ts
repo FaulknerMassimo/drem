@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { ProviderError, StreamStoppedError } from "./providers/errors";
+import { ProviderError, ProviderStallError, StreamStoppedError } from "./providers/errors";
 import { streamLines, type StreamBudget } from "./providers/http";
 import { anthropicChatStream } from "./providers/anthropic";
 import { ollamaChatStream } from "./providers/ollama";
@@ -305,6 +305,38 @@ describe("stream budgets", () => {
         ),
       ),
     ).rejects.toBeInstanceOf(StreamStoppedError);
+  });
+
+  it("separates a model that ran out of time from a host that is not there", async () => {
+    /*
+     * The distinction the retry policy is built on. A model that was reached
+     * and given its budget will spend the same budget on the next attempt and
+     * stop in the same place, so the job is failed outright rather than queued
+     * again -- three of those is a laptop running hot for an hour to produce
+     * one error. A host that was not there is worth another go.
+     */
+    const stalled = drain(
+      streamLines(
+        "http://x/api/chat",
+        {},
+        vi.fn(async () => silence()) as unknown as typeof fetch,
+        budget(),
+      ),
+    );
+    await expect(stalled).rejects.toBeInstanceOf(ProviderStallError);
+
+    const unreachable = drain(
+      streamLines(
+        "http://x/api/chat",
+        {},
+        vi.fn(async () => {
+          throw new TypeError("fetch failed");
+        }) as unknown as typeof fetch,
+        budget(),
+      ),
+    );
+    await expect(unreachable).rejects.toThrow("Could not reach x");
+    await expect(unreachable).rejects.not.toBeInstanceOf(ProviderStallError);
   });
 
   it("never reads an error body, which is where prompts get echoed", async () => {

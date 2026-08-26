@@ -94,9 +94,8 @@ function ndjson(...lines: unknown[]): Response {
 /** The naming call is the one carrying the title instructions, not the tools. */
 function isTitleRequest(init?: RequestInit): boolean {
   const body = JSON.parse(String(init?.body));
-  return (
-    body.stream === false &&
-    body.messages.some((message: { content: string }) => message.content.includes("You name conversations"))
+  return body.messages.some((message: { content: string }) =>
+    message.content.includes("You name conversations"),
   );
 }
 

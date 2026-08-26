@@ -91,9 +91,10 @@ entries. It refuses to run against anything but a `_dev` database.
    ciphertext between rows or columns. Never pass a constant or a guess.
 
 3. **Never log or serialise plaintext.** Not to `console`, not into the audit
-   log's `detail`, not into a job payload, not into an error message. Jobs carry
-   identifiers only; the worker re-reads and decrypts. `global-error.tsx`
-   deliberately says nothing about what failed.
+   log's `detail`, not into a job payload, not into an error message, and not
+   into a job's progress columns, which hold a phase and a character count and
+   are allowed nothing else. Jobs carry identifiers only; the worker re-reads
+   and decrypts. `global-error.tsx` deliberately says nothing about what failed.
 
 4. **Keys never leave process memory.** They are not in cookies, the database,
    or any cache. If you find yourself wanting to persist a key to make something
@@ -272,14 +273,25 @@ them.
   simply `undefined` there — the copy button on a chat answer checks for it
   after mount rather than during render, so the markup does not disagree with
   itself on a machine where it exists.
-- **A streamed answer is bounded on silence, not on elapsed time.** The single
-  `CHAT_TIMEOUT_MS` that every queued job uses is right for a job and wrong for
-  a conversation: it cut large models off mid-answer while they were still
-  working, which is exactly the failure it looks like it is preventing.
-  `streamLines` takes three budgets instead — first byte, then between bytes,
-  then an outer ceiling — and enforces them itself rather than trusting the
-  abort signal to reach the body, because a hung read is the one case where it
-  would not. Collapsing them back into one reintroduces the bug.
+- **Every completion is bounded on silence, not on elapsed time.** A single
+  total budget cut large models off mid-answer while they were still working,
+  which is exactly the failure it looks like it is preventing. It was wrong for
+  a conversation first and wrong for the queued jobs all along: a buffered
+  request can only be asked whether the whole answer has arrived, so its budget
+  measures how long an answer *is*. `streamLines` takes three budgets instead —
+  first byte, then between bytes, then an outer ceiling — and enforces them
+  itself rather than trusting the abort signal to reach the body, because a
+  hung read is the one case where it would not. Collapsing them back into one
+  reintroduces the bug. There is no buffered chat path left to collapse them
+  into: `completeRole` streams and reassembles, and adding a buffered adapter
+  back would quietly reintroduce a total ceiling with it.
+- **A job that ran out of time is failed outright; one that could not reach the
+  host is retried.** `ProviderStallError` is the difference, and it is checked
+  by type rather than by matching the message. Retrying a stall is three
+  identical attempts against the same model on the same machine, which on a
+  laptop is an hour of heat for one error — so `failJob` takes `retryable` and
+  returns the status it landed on. A new failure path that defaults everything
+  to retryable puts that back.
 - **Journal chat is the one screen that needs JavaScript.** Everything else
   works as a native form POST, and this deliberately does not: an answer that
   appears as it is written cannot come from a Server Action, which resolves
@@ -320,6 +332,15 @@ them.
   which is indistinguishable from never having been asked. Any new screen that
   enqueues work reads `latestJobState` / `jobQueueSummary` and renders
   `<JobStatus>`; a spinner with no failure state is not finished.
+- **A job in flight reports counts, never a character of what the model wrote.**
+  `jobs.progress_phase` and `jobs.progress_chars` exist because "Generating…"
+  says the same thing at second three and at minute nineteen, and a local model
+  is slow enough that the difference matters. They are an unencrypted table, so
+  a length is the ceiling on what may go there — the reasoning and the answer
+  are both derived from the journal. `reportProgress` carries the listener in
+  async context precisely so nothing has to widen a signature to pass text
+  around. `heartbeat_at` is also what `reclaimStuckJobs` measures from: against
+  `started_at` alone it re-queues a legitimately slow scan underneath itself.
 - **The service worker is registered in production only.** It is cache-first
   over `/_next/static/`, which is right for a build — those paths carry a
   content hash — and wrong for `next dev`, which serves changed bytes at the

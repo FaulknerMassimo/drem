@@ -12,6 +12,7 @@ import { and, asc, desc, eq, inArray, lte, sql } from "drizzle-orm";
 import { db } from "@/db";
 import { jobs } from "@/db/schema";
 import { isIsoDate, type IsoDate } from "@/lib/journal/dates";
+import type { ModelPhase } from "./progress";
 import type { DreamInsightKind, InsightRole } from "./types";
 
 export type InsightJobKind =
@@ -323,6 +324,8 @@ export interface AttachmentJobProgress {
   attempts: number;
   maxAttempts: number;
   lastError: string | null;
+  /** How far the transcript has got, while it is being written. */
+  progress: JobProgress | null;
 }
 
 export const MAX_JOB_ATTEMPTS = 3;
@@ -332,7 +335,13 @@ export async function attachmentJobProgress(
   attachmentId: string,
 ): Promise<AttachmentJobProgress | null> {
   const [row] = await db
-    .select({ attempts: jobs.attempts, lastError: jobs.lastError })
+    .select({
+      attempts: jobs.attempts,
+      lastError: jobs.lastError,
+      progressPhase: jobs.progressPhase,
+      progressChars: jobs.progressChars,
+      heartbeatAt: jobs.heartbeatAt,
+    })
     .from(jobs)
     .where(
       and(
@@ -348,6 +357,7 @@ export async function attachmentJobProgress(
     attempts: row.attempts,
     maxAttempts: MAX_JOB_ATTEMPTS,
     lastError: row.lastError,
+    progress: readProgress(row),
   };
 }
 
@@ -400,7 +410,26 @@ export interface JobState {
   lastError: string | null;
   /** When the next attempt is due; in the past once the retries are spent. */
   scheduledFor: Date;
+  /** What the model is doing right now, and how far in. See `jobs.progress_*`. */
+  progress: JobProgress | null;
 }
+
+/**
+ * The live half of a job's status: proof of life while a model writes.
+ *
+ * A screen that can only say "Generating…" is saying the same thing at second
+ * three and at minute nineteen, and a reader with a hot laptop and no output
+ * has no way to tell a model that is working from one that is never coming
+ * back. This is the difference, and it is deliberately thin -- a phase, a
+ * count, and when the count last moved.
+ */
+export interface JobProgress {
+  phase: ModelPhase;
+  characters: number;
+  at: Date;
+}
+
+const PROGRESS_PHASES: ModelPhase[] = ["thinking", "writing"];
 
 function toJobState(row: {
   kind: JobKind;
@@ -408,6 +437,9 @@ function toJobState(row: {
   attempts: number;
   lastError: string | null;
   scheduledFor: Date;
+  progressPhase: string | null;
+  progressChars: number;
+  heartbeatAt: Date | null;
 }): JobState {
   return {
     kind: row.kind,
@@ -416,7 +448,18 @@ function toJobState(row: {
     maxAttempts: MAX_JOB_ATTEMPTS,
     lastError: row.lastError,
     scheduledFor: row.scheduledFor,
+    progress: readProgress(row),
   };
+}
+
+function readProgress(row: {
+  progressPhase: string | null;
+  progressChars: number;
+  heartbeatAt: Date | null;
+}): JobProgress | null {
+  const phase = PROGRESS_PHASES.find((candidate) => candidate === row.progressPhase);
+  if (!phase || !row.heartbeatAt) return null;
+  return { phase, characters: row.progressChars, at: row.heartbeatAt };
 }
 
 /**
@@ -437,6 +480,9 @@ export async function latestDreamJobStates(
       attempts: jobs.attempts,
       lastError: jobs.lastError,
       scheduledFor: jobs.scheduledFor,
+      progressPhase: jobs.progressPhase,
+      progressChars: jobs.progressChars,
+      heartbeatAt: jobs.heartbeatAt,
       payload: jobs.payload,
       createdAt: jobs.createdAt,
     })
@@ -468,6 +514,9 @@ export async function latestJobState(userId: string, kind: JobKind): Promise<Job
       attempts: jobs.attempts,
       lastError: jobs.lastError,
       scheduledFor: jobs.scheduledFor,
+      progressPhase: jobs.progressPhase,
+      progressChars: jobs.progressChars,
+      heartbeatAt: jobs.heartbeatAt,
     })
     .from(jobs)
     .where(and(eq(jobs.userId, userId), eq(jobs.kind, kind)))
@@ -535,6 +584,11 @@ export async function claimNextJob(): Promise<JobRecord | null> {
       status: "running",
       startedAt: new Date(),
       attempts: sql`${jobs.attempts} + 1`,
+      // Last attempt's progress is not this attempt's; a stale count left on
+      // the row would read as work already done.
+      progressPhase: null,
+      progressChars: 0,
+      heartbeatAt: null,
     })
     .where(and(eq(jobs.id, row.id), eq(jobs.status, "pending")));
 
@@ -553,7 +607,14 @@ export async function claimNextJob(): Promise<JobRecord | null> {
 export async function completeJob(id: string): Promise<void> {
   await db
     .update(jobs)
-    .set({ status: "succeeded", completedAt: new Date(), lastError: null })
+    .set({
+      status: "succeeded",
+      completedAt: new Date(),
+      lastError: null,
+      progressPhase: null,
+      progressChars: 0,
+      heartbeatAt: null,
+    })
     .where(eq(jobs.id, id));
 }
 
@@ -564,8 +625,28 @@ export async function skipJob(id: string, reason: string): Promise<void> {
     .where(eq(jobs.id, id));
 }
 
-export async function failJob(id: string, attempts: number, reason: string): Promise<void> {
-  const retry = attempts < MAX_JOB_ATTEMPTS;
+/**
+ * Records a failure, and says whether the job is finished with.
+ *
+ * `retryable` is the caller's read of *why* it failed, and it is the whole
+ * difference between a queue that recovers and one that burns a laptop down
+ * three times for one answer. A host that was not there is worth asking again:
+ * a model server that had not finished starting is the usual cause and the
+ * retry is free. A model that was reached, given its budget and did not finish
+ * inside it is not — the next attempt is the same prompt against the same
+ * model on the same machine, so it will take the same time and stop in the
+ * same place, and all it produces is fans and heat.
+ *
+ * Returns the status the job landed on, because the caller often has something
+ * else to move with it.
+ */
+export async function failJob(
+  id: string,
+  attempts: number,
+  reason: string,
+  retryable = true,
+): Promise<"pending" | "failed"> {
+  const retry = retryable && attempts < MAX_JOB_ATTEMPTS;
   await db
     .update(jobs)
     .set({
@@ -574,8 +655,31 @@ export async function failJob(id: string, attempts: number, reason: string): Pro
       scheduledFor: retry ? new Date(Date.now() + backoffMs(attempts)) : new Date(),
       completedAt: retry ? null : new Date(),
       startedAt: null,
+      progressPhase: null,
+      progressChars: 0,
+      heartbeatAt: null,
     })
     .where(eq(jobs.id, id));
+  return retry ? "pending" : "failed";
+}
+
+/**
+ * Notes that the model is still writing.
+ *
+ * Called far more often than anything else here, and deliberately unguarded by
+ * a transaction: it is one row, it is advisory, and a write of it that loses a
+ * race with the job finishing costs a stale count on a row nothing reads any
+ * more. The worker throttles it; see `progressWriter`.
+ */
+export async function recordJobProgress(
+  id: string,
+  phase: ModelPhase,
+  characters: number,
+): Promise<void> {
+  await db
+    .update(jobs)
+    .set({ progressPhase: phase, progressChars: characters, heartbeatAt: new Date() })
+    .where(and(eq(jobs.id, id), eq(jobs.status, "running")));
 }
 
 /**
@@ -601,13 +705,31 @@ function backoffMs(attempts: number): number {
   return Math.min(15_000 * 4 ** (attempts - 1), 15 * 60 * 1000);
 }
 
-/** Running jobs whose worker died: put them back in the queue. */
+/**
+ * Running jobs whose worker died: put them back in the queue.
+ *
+ * Measured from the last sign of life rather than from the start, which is the
+ * only version of this that survives a slow local model. A dream-sign scan can
+ * legitimately spend most of an hour writing, and against `startedAt` alone
+ * this would re-queue it underneath itself half way through — a second copy of
+ * the same expensive job, on the same laptop, racing the first to write the
+ * same signs. A job that is still emitting tokens heartbeats every couple of
+ * seconds; one that has not made a sound in half an hour really is gone.
+ */
 export async function reclaimStuckJobs(maxAgeMs = 30 * 60 * 1000): Promise<number> {
   const cutoff = new Date(Date.now() - maxAgeMs);
   const reclaimed = await db
     .update(jobs)
-    .set({ status: "pending", startedAt: null })
-    .where(and(eq(jobs.status, "running"), lte(jobs.startedAt, cutoff)))
+    .set({ status: "pending", startedAt: null, progressPhase: null, heartbeatAt: null })
+    .where(
+      and(
+        eq(jobs.status, "running"),
+        lte(
+          sql`greatest(${jobs.startedAt}, coalesce(${jobs.heartbeatAt}, ${jobs.startedAt}))`,
+          cutoff,
+        ),
+      ),
+    )
     .returning({ id: jobs.id });
   return reclaimed.length;
 }

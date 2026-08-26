@@ -73,18 +73,43 @@ Deviations from the original plan, all deliberate:
   export is sealed by its passphrase alone — the single deliberate weakening in
   the codebase. It is bounded by running the KDF at full cost, refusing a short
   passphrase, and saying so on the screen that writes the file.
-- **A conversation is streamed, and bounded on silence rather than on total
-  time.** Every other model call in the app is a queued job whose result lands
-  on a page that polls, so one timeout covering the whole request is the right
-  shape for it. Chat is the exception: somebody is sitting in front of it, and
-  a long answer from a large model is not a failing one. The old 120-second
-  ceiling cut those off mid-thought while the model was still working, and the
-  screen showed nothing at all until the request either finished or died. The
-  chat route streams instead, over three budgets that can tell the cases apart:
-  a generous wait for the first byte (a cold model is minutes of loading before
-  a token), a shorter one between tokens, and a total ceiling only so a stream
-  that drips forever cannot hold a connection open for a day. The cost is that
-  this screen, alone in the app, needs JavaScript.
+- **Every model call is streamed, and bounded on silence rather than on total
+  time.** Chat came first, because somebody is sitting in front of it and the
+  old 120-second ceiling cut long answers off mid-thought while the model was
+  still working. The queued jobs turned out to have the same problem in a worse
+  form: a buffered request can only be asked "is the whole answer here yet", so
+  the only budget it can be held to measures how long an answer *is* rather
+  than whether the machine is still working on it. On a laptop reading a season
+  of entries the honest answer is "not for a while", and five minutes of real
+  work was being thrown away, reported as a failure, and asked for again twice.
+  So every completion now reads the provider as a stream — `completeRole`
+  assembles the pieces back into one answer for callers that want the finished
+  text — over three budgets that can tell the cases apart: a generous wait for
+  the first byte (a cold model is minutes of loading before a token), a shorter
+  one between tokens, and a total ceiling only so a stream that drips forever
+  cannot hold a connection open for a day. The role ceilings are hours now,
+  which costs nothing: silence is what catches a model that has actually died.
+- **A job that runs out of time is not tried again; a host that was not there
+  is.** They are the same sentence to a queue and opposite problems on a
+  laptop. A model server that had not finished starting is worth another go and
+  the retry is free. A model that was reached, given its budget and did not
+  finish inside it will spend the same budget on the same prompt against the
+  same model, and stop in the same place — so three attempts is an hour of fans
+  and heat to produce one error message. The provider layer distinguishes them
+  by type rather than by wording, and the screen says which one happened and
+  what to change.
+- **A queued job says how far it has got, in counts and never in words.** A
+  screen that can only say "Generating…" says the same thing at second three
+  and at minute nineteen, which is what made a slow feature indistinguishable
+  from a broken one. Jobs carry a phase and a character count, updated a couple
+  of times a second while the model writes. Not a word of what it wrote: the
+  reasoning and the answer are both derived from the journal and `jobs` is an
+  unencrypted table, so a length is the most that can go there — and a number
+  that keeps climbing is the whole message anyway. The same counter is what
+  tells a slow job from an abandoned one, so a scan that legitimately runs for
+  half an hour is no longer re-queued underneath itself.
+- **The conversation screen is the one that needs JavaScript.** It is the cost
+  of showing an answer as it is written rather than when it is finished.
 - **A conversation is named by the model, after its first answer.** The first
   sixty characters of the question was a placeholder that read like one: every
   thread in the sidebar began the same way, and the list was of openings rather

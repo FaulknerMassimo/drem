@@ -9,13 +9,18 @@
  * Two ways out: `completeRole` for a queued job, which wants the finished text,
  * and `streamRole` for the conversation, which wants the pieces as they arrive.
  * Both resolve the call the same way, so a role that is refused for one is
- * refused for the other.
+ * refused for the other, and both read the provider as a stream — the
+ * difference is only whether the pieces reach the caller or are assembled
+ * first.
  */
 import "server-only";
 import { destinationForAssignment } from "./destination";
-import { providerChat, providerChatStream } from "./providers";
+import { providerChatStream } from "./providers";
+import { reportProgress } from "./progress";
 import {
   chatStreamBudget,
+  CHAT_TIMEOUT_MS,
+  jobStreamBudget,
   OCR_TIMEOUT_MS,
   REPORT_TIMEOUT_MS,
   SCAN_TIMEOUT_MS,
@@ -35,6 +40,7 @@ import type {
   ModelRole,
   ProviderConfig,
   RoleAssignment,
+  ToolCall,
 } from "./types";
 
 export class RoleNotConfiguredError extends Error {
@@ -91,7 +97,14 @@ const THINKING: Partial<Record<ChatRole, boolean>> = {
   split: false,
 };
 
-/** Roles the default chat budget is too tight for. The rest fall back to it. */
+/**
+ * How long each role's answer may take in total.
+ *
+ * A ceiling on a stream that is making progress, not a stopwatch on the model:
+ * one that has actually stopped is caught by `JOB_IDLE_TIMEOUT_MS` in minutes,
+ * whatever its role is allowed here. The roles absent from this list are the
+ * per-entry insights, whose prompt is one dream.
+ */
 const TIMEOUTS: Partial<Record<ChatRole, number>> = {
   signs: SCAN_TIMEOUT_MS,
   ocr: OCR_TIMEOUT_MS,
@@ -113,6 +126,21 @@ export interface ChatBudget {
   timeoutMs?: number;
 }
 
+/**
+ * The finished answer for one role.
+ *
+ * Streamed underneath even though the caller wants the whole thing, which is
+ * not a detail: a buffered request cannot distinguish a model that is working
+ * from a host that has gone away, so the only budget it can be held to is a
+ * total one — and a total budget on a local model reading a whole period is a
+ * working answer thrown away and asked for again. Reading it as a stream buys
+ * two things a queued job could not have otherwise: it is bounded on silence
+ * rather than on length, and it can say how far along it is while it runs.
+ *
+ * The pieces are collapsed here rather than by each caller. Everything but the
+ * chat screen wants one answer to file, and the assembly is identical for all
+ * of them.
+ */
 export async function completeRole(
   config: AiConfig,
   role: ChatRole,
@@ -120,14 +148,48 @@ export async function completeRole(
   options: CallOptions = {},
 ): Promise<{ response: ChatResponse; destination: Destination }> {
   const call = resolveCall(config, role, options.assignment ?? null);
-  const response = await providerChat(
+  const totalMs = options.budget?.timeoutMs ?? TIMEOUTS[role] ?? CHAT_TIMEOUT_MS;
+  const events = providerChatStream(
     call.provider,
     request(call, role, messages, options),
     globalThis.fetch,
-    options.budget?.timeoutMs ?? TIMEOUTS[role],
+    jobStreamBudget(totalMs),
   );
 
-  return { response, destination: call.destination };
+  return { response: await collect(events), destination: call.destination };
+}
+
+/**
+ * One answer out of the pieces it arrived in.
+ *
+ * The running totals are reported as they grow and then discarded. `thinking`
+ * is never accumulated at all — only measured — because it is not part of the
+ * answer, is worth nothing once the answer exists, and is derived from the
+ * journal.
+ */
+async function collect(events: AsyncGenerator<ChatStreamEvent>): Promise<ChatResponse> {
+  let text = "";
+  let thought = 0;
+  let toolCalls: ToolCall[] | undefined;
+  let inputTokens: number | undefined;
+  let outputTokens: number | undefined;
+
+  for await (const event of events) {
+    if (event.type === "text") {
+      text += event.delta;
+      reportProgress({ phase: "writing", characters: text.length });
+    } else if (event.type === "thinking") {
+      thought += event.delta.length;
+      reportProgress({ phase: "thinking", characters: thought });
+    } else if (event.type === "tool_calls") {
+      toolCalls = event.calls;
+    } else {
+      inputTokens = event.inputTokens;
+      outputTokens = event.outputTokens;
+    }
+  }
+
+  return { text, toolCalls, inputTokens, outputTokens };
 }
 
 /**

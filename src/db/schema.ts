@@ -528,6 +528,23 @@ export const jobs = pgTable(
     attempts: integer("attempts").notNull().default(0),
     lastError: text("last_error"),
 
+    /**
+     * How far the model has got, for a job still running.
+     *
+     * A count and a phase, never a character of what was written: both the
+     * reasoning and the answer are derived from the journal, and this table is
+     * unencrypted. A length is the most that can be stored here without
+     * breaking the rule the rest of the schema exists for — and it is all the
+     * screen needs, because a number going up is the whole message.
+     *
+     * `heartbeatAt` is also what tells a job that is slow from one whose worker
+     * died: `reclaimStuckJobs` reads it rather than `startedAt`, so a scan that
+     * legitimately runs for half an hour is not re-queued underneath itself.
+     */
+    progressPhase: text("progress_phase"),
+    progressChars: integer("progress_chars").notNull().default(0),
+    heartbeatAt: timestamp("heartbeat_at", { withTimezone: true }),
+
     scheduledFor: timestamp("scheduled_for", { withTimezone: true }).notNull().defaultNow(),
     startedAt: timestamp("started_at", { withTimezone: true }),
     completedAt: timestamp("completed_at", { withTimezone: true }),

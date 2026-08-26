@@ -451,6 +451,12 @@ function ReadingState({
           attempt this is, and why the last one failed, is the difference
           between waiting and knowing to go fix Settings.
         */}
+        {progress?.progress && (
+          <p role="status" className="text-sm text-ink-400">
+            {progress.progress.phase === "thinking" ? "Thinking" : "Writing"} —{" "}
+            {progress.progress.characters.toLocaleString()} characters so far.
+          </p>
+        )}
         {retrying && (
           <p role="status" className="text-sm text-warn-500">
             Attempt {retrying.attempts} of {retrying.maxAttempts} failed:{" "}
