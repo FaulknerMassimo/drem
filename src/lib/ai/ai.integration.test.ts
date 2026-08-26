@@ -17,7 +17,7 @@ import { runConversationAgent } from "@/lib/ai/conversation-agent";
 import { getConversation, saveConversationExchange } from "@/lib/ai/conversations";
 import { emptyRoles } from "@/lib/ai/schema";
 import { insightsForDream, latestInsightForDream, saveInsight } from "@/lib/ai/insights";
-import { enqueueDreamInsight, parseDreamPayload } from "@/lib/ai/jobs";
+import { enqueueDreamInsight, parseDreamPayload, reclaimStuckJobs } from "@/lib/ai/jobs";
 import { processNextJob } from "@/lib/ai/worker";
 import { __clearKeyStore, peekKeysForUser, putKeys } from "@/lib/auth/key-store";
 import { createInitialAccount } from "@/lib/auth/accounts";
@@ -306,6 +306,63 @@ describe("the job queue", () => {
     const [job] = await db.select().from(jobs);
     expect(job?.status).toBe("pending");
     expect(job?.attempts).toBe(0);
+  });
+
+  it("reclaims silent jobs without reclaiming a job with a recent heartbeat", async () => {
+    const dreamId = await createDream(userId, keys, dreamInput({ body: "a corridor" }));
+    const silentId = await enqueueDreamInsight(userId, dreamId, "extraction");
+    const staleId = await enqueueDreamInsight(userId, dreamId, "lucidity");
+    const activeId = await enqueueDreamInsight(userId, dreamId, "symbolic");
+    const old = new Date(Date.now() - 2 * 60_000);
+
+    await db
+      .update(jobs)
+      .set({ status: "running", startedAt: old, progressPhase: "thinking", progressChars: 12 })
+      .where(eq(jobs.id, silentId));
+    await db
+      .update(jobs)
+      .set({
+        status: "running",
+        startedAt: old,
+        heartbeatAt: old,
+        progressPhase: "writing",
+        progressChars: 24,
+      })
+      .where(eq(jobs.id, staleId));
+    await db
+      .update(jobs)
+      .set({
+        status: "running",
+        startedAt: old,
+        heartbeatAt: new Date(),
+        progressPhase: "writing",
+        progressChars: 36,
+      })
+      .where(eq(jobs.id, activeId));
+
+    expect(await reclaimStuckJobs(60_000)).toBe(2);
+
+    const rows = await db.select().from(jobs);
+    const silent = rows.find((row) => row.id === silentId);
+    const stale = rows.find((row) => row.id === staleId);
+    const active = rows.find((row) => row.id === activeId);
+    expect(silent).toMatchObject({
+      status: "pending",
+      startedAt: null,
+      heartbeatAt: null,
+      progressPhase: null,
+    });
+    expect(stale).toMatchObject({
+      status: "pending",
+      startedAt: null,
+      heartbeatAt: null,
+      progressPhase: null,
+    });
+    expect(active).toMatchObject({
+      status: "running",
+      progressPhase: "writing",
+      progressChars: 36,
+    });
   });
 });
 

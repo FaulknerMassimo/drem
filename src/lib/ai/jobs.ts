@@ -8,7 +8,7 @@
  */
 import "server-only";
 import { randomUUID } from "node:crypto";
-import { and, asc, desc, eq, inArray, lte, sql } from "drizzle-orm";
+import { and, asc, desc, eq, inArray, isNull, lte, or, sql } from "drizzle-orm";
 import { db } from "@/db";
 import { jobs } from "@/db/schema";
 import { isIsoDate, type IsoDate } from "@/lib/journal/dates";
@@ -724,10 +724,8 @@ export async function reclaimStuckJobs(maxAgeMs = 30 * 60 * 1000): Promise<numbe
     .where(
       and(
         eq(jobs.status, "running"),
-        lte(
-          sql`greatest(${jobs.startedAt}, coalesce(${jobs.heartbeatAt}, ${jobs.startedAt}))`,
-          cutoff,
-        ),
+        lte(jobs.startedAt, cutoff),
+        or(isNull(jobs.heartbeatAt), lte(jobs.heartbeatAt, cutoff)),
       ),
     )
     .returning({ id: jobs.id });
