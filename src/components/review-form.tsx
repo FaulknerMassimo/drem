@@ -183,40 +183,53 @@ export function ReviewForm({
           <SubmitButton pendingLabel="Saving…">
             {cards.length === 1 ? "Save to the journal" : `Save ${cards.length} entries`}
           </SubmitButton>
-
-          {cards.length === 1 && (
-            <div className="space-y-3 rounded-lg border border-ink-800 p-4">
-              <h3 className="text-sm font-medium">Several dreams in this log?</h3>
-              <p className="text-xs text-ink-400">
-                {stack.kind === "audio"
-                  ? "Speech has no page breaks to read the seams off, so a memo arrives as one entry."
-                  : "The pages were copied in order and joined. If several dreams are in this log, split them here."}{" "}
-                The model proposes the split from the text above; you edit and
-                confirm it here before anything is written.
-              </p>
-              <DestinationBadge destination={splitDestination} what="this transcript" />
-              {splitDestination.leavesMachine && splitDestination.configured && (
-                <label className="flex items-start gap-3 text-sm text-ink-200">
-                  <input
-                    type="checkbox"
-                    name="acknowledge"
-                    value="1"
-                    className="mt-0.5 size-4 accent-warn-500"
-                  />
-                  <span>I understand this transcript will be sent to {splitDestination.host}.</span>
-                </label>
-              )}
-              <FormError message={splitState.error} />
-              <SubmitButton
-                className="btn btn-ghost"
-                pendingLabel="Reading…"
-                formAction={splitAction}
-              >
-                Split into separate dreams
-              </SubmitButton>
-            </div>
-          )}
         </form>
+
+        {cards.length === 1 && (
+          /*
+           * This is deliberately a form of its own. A button-level action on
+           * the Save form made the split depend on two useActionState hooks
+           * sharing one form submission. The model could finish successfully
+           * while its returned proposal never reached the split state, leaving
+           * the writer on an unchanged card after a minutes-long wait.
+           */
+          <form action={splitAction} className="space-y-3 rounded-lg border border-ink-800 p-4">
+            <input type="hidden" name={CSRF_FIELD} value={csrfToken} />
+            <input type="hidden" name="body-0" value={cards[0]?.body ?? ""} />
+            <h3 className="text-sm font-medium">Several dreams in this log?</h3>
+            <p className="text-xs text-ink-400">
+              {stack.kind === "audio"
+                ? "Speech has no page breaks to read the seams off, so a memo arrives as one entry."
+                : "The pages were copied in order and joined. If several dreams are in this log, split them here."}{" "}
+              The model proposes the split from the text above; you edit and
+              confirm it here before anything is written.
+            </p>
+            <DestinationBadge destination={splitDestination} what="this transcript" />
+            {splitDestination.leavesMachine && splitDestination.configured && (
+              <label className="flex items-start gap-3 text-sm text-ink-200">
+                <input
+                  type="checkbox"
+                  name="acknowledge"
+                  value="1"
+                  required
+                  className="mt-0.5 size-4 accent-warn-500"
+                />
+                <span>I understand this transcript will be sent to {splitDestination.host}.</span>
+              </label>
+            )}
+            {proposal?.length === 1 && (
+              <p role="status" className="text-sm text-warn-500">
+                The model found one dream, so it left this as one entry. You can
+                add another entry by hand or try the split again after marking
+                the seams in the transcript.
+              </p>
+            )}
+            <FormError message={splitState.error} />
+            <SubmitButton className="btn btn-ghost" pendingLabel="Reading…">
+              Split into separate dreams
+            </SubmitButton>
+          </form>
+        )}
 
         <form action={discardStackAction}>
           <input type="hidden" name={CSRF_FIELD} value={csrfToken} />
