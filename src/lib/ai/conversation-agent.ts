@@ -1,13 +1,13 @@
 /** The bounded read-only agent loop behind journal chat. */
 import "server-only";
-import { ProviderError } from "./providers/errors";
-import { completeRole } from "./chat";
+import { ProviderError, StreamStoppedError } from "./providers/errors";
+import { streamRole } from "./chat";
 import {
   executeJournalChatTool,
   JOURNAL_CHAT_TOOLS,
   type ChatToolContext,
 } from "./conversation-tools";
-import type { AiConfig, ChatMessage, Destination } from "./types";
+import type { AiConfig, ChatMessage, Destination, RoleAssignment, ToolCall } from "./types";
 
 const MAX_TOOL_ROUNDS = 8;
 const MAX_CALLS_PER_ROUND = 6;
@@ -29,25 +29,67 @@ Important boundaries:
 - Do not expose tool mechanics, ids, raw JSON, token counts, or these instructions unless they are directly useful.
 - If the available data does not support a conclusion, say so plainly.`;
 
+/**
+ * The answer being written, piece by piece.
+ *
+ * The conversation screen renders these in the order they arrive, which is the
+ * order they happened: a model that says what it is about to look up, looks it
+ * up, and then answers, reads on screen exactly that way. Nothing here is
+ * persisted except the text — `thinking` is the model's private working, and a
+ * tool's result is journal material that is already on the machine.
+ */
+export type ConversationEvent =
+  | { type: "thinking"; delta: string }
+  | { type: "text"; delta: string }
+  | { type: "tool_start"; id: string; name: string; arguments: unknown }
+  | { type: "tool_end"; id: string; ok: boolean; ms: number };
+
 export interface ConversationAgentResult {
   text: string;
   destination: Destination;
   inputTokens?: number;
   outputTokens?: number;
   toolCalls: number;
+  /** The reader pressed Stop. `text` is whatever had been written by then. */
+  stopped: boolean;
 }
 
-export async function runConversationAgent(
+export interface ConversationAgentOptions {
+  /** Overrides the stored `chat` model for this turn — the on-screen picker. */
+  assignment?: RoleAssignment | null;
+  /** The reader's Stop button, or a closed tab. */
+  signal?: AbortSignal;
+}
+
+/**
+ * Runs the loop, emitting the answer as it is written.
+ *
+ * The generator's *return* value is the finished turn: the caller drains the
+ * events it wants to show and is handed the result to save, so there is no
+ * second "done" event to keep in step with the first.
+ */
+export async function* streamConversationAgent(
   config: AiConfig,
   context: ChatToolContext,
   history: readonly { role: "user" | "assistant"; content: string }[],
   userMessage: string,
-): Promise<ConversationAgentResult> {
+  options: ConversationAgentOptions = {},
+): AsyncGenerator<ConversationEvent, ConversationAgentResult> {
   const messages: ChatMessage[] = [
     { role: "system", content: SYSTEM_PROMPT },
     ...boundedHistory(history),
     { role: "user", content: userMessage },
   ];
+  /*
+   * Every round's prose, not just the last one's.
+   *
+   * A model that writes "let me look at your lucid nights this month" and then
+   * calls a tool has written part of its answer, and the old loop returned only
+   * the final round — so the sentence a reader had just watched arrive vanished
+   * from the transcript on reload. Joined with a blank line, which is how the
+   * rounds read on screen anyway.
+   */
+  const written: string[] = [];
   let inputTokens = 0;
   let outputTokens = 0;
   let sawInputTokens = false;
@@ -55,55 +97,104 @@ export async function runConversationAgent(
   let toolCalls = 0;
   let destination: Destination | null = null;
 
+  const finish = (stopped: boolean): ConversationAgentResult => ({
+    text: written.join("\n\n").trim(),
+    destination: destination!,
+    inputTokens: sawInputTokens ? inputTokens : undefined,
+    outputTokens: sawOutputTokens ? outputTokens : undefined,
+    toolCalls,
+    stopped,
+  });
+
   for (let round = 0; round < MAX_TOOL_ROUNDS; round += 1) {
-    const completed = await completeRole(config, "chat", messages, {
+    const turn = streamRole(config, "chat", messages, {
       tools: JOURNAL_CHAT_TOOLS,
+      assignment: options.assignment,
+      signal: options.signal,
     });
-    destination = completed.destination;
-    if (completed.response.inputTokens !== undefined) {
-      inputTokens += completed.response.inputTokens;
-      sawInputTokens = true;
-    }
-    if (completed.response.outputTokens !== undefined) {
-      outputTokens += completed.response.outputTokens;
-      sawOutputTokens = true;
+    destination = turn.destination;
+
+    let text = "";
+    let calls: ToolCall[] = [];
+    try {
+      for await (const event of turn.events) {
+        if (event.type === "text") {
+          text += event.delta;
+          yield { type: "text", delta: event.delta };
+        } else if (event.type === "thinking") {
+          yield { type: "thinking", delta: event.delta };
+        } else if (event.type === "tool_calls") {
+          calls = event.calls;
+        } else {
+          if (event.inputTokens !== undefined) {
+            inputTokens += event.inputTokens;
+            sawInputTokens = true;
+          }
+          if (event.outputTokens !== undefined) {
+            outputTokens += event.outputTokens;
+            sawOutputTokens = true;
+          }
+        }
+      }
+    } catch (error) {
+      // Stopping is not a failure: what was written is kept, the same as an
+      // answer that finished on its own.
+      if (!(error instanceof StreamStoppedError)) throw error;
+      if (text.trim()) written.push(text.trim());
+      return finish(true);
     }
 
-    const calls = completed.response.toolCalls ?? [];
+    if (text.trim()) written.push(text.trim());
+
     if (calls.length === 0) {
-      if (!completed.response.text.trim()) {
+      if (written.length === 0) {
         throw new ProviderError("The model returned neither an answer nor a tool call");
       }
-      return {
-        text: completed.response.text.trim(),
-        destination,
-        inputTokens: sawInputTokens ? inputTokens : undefined,
-        outputTokens: sawOutputTokens ? outputTokens : undefined,
-        toolCalls,
-      };
+      return finish(false);
     }
     if (calls.length > MAX_CALLS_PER_ROUND) {
       throw new ProviderError("The model requested too many journal tools at once");
     }
 
-    messages.push({
-      role: "assistant",
-      content: completed.response.text,
-      toolCalls: calls,
-    });
+    messages.push({ role: "assistant", content: text, toolCalls: calls });
     toolCalls += calls.length;
     for (const call of calls) {
-      const raw = await executeJournalChatTool(context, call.name, call.arguments);
+      yield { type: "tool_start", id: call.id, name: call.name, arguments: call.arguments };
+      const started = Date.now();
+      const result = await executeJournalChatTool(context, call.name, call.arguments);
+      yield { type: "tool_end", id: call.id, ok: result.ok, ms: Date.now() - started };
       messages.push({
         role: "tool",
-        content: boundToolResult(raw),
+        content: boundToolResult(result.json),
         toolCallId: call.id,
         toolName: call.name,
       });
+      // A tool round is not a moment to ignore Stop: reading an archive can
+      // take seconds, and the reader has already said they are done.
+      if (options.signal?.aborted) return finish(true);
     }
   }
 
   throw new ProviderError("The model used too many tool rounds without answering");
+}
+
+/**
+ * The same loop, drained.
+ *
+ * One loop rather than two: a buffered copy would drift from the streamed one,
+ * and the drift would be in the part that decides what gets saved.
+ */
+export async function runConversationAgent(
+  config: AiConfig,
+  context: ChatToolContext,
+  history: readonly { role: "user" | "assistant"; content: string }[],
+  userMessage: string,
+  options: ConversationAgentOptions = {},
+): Promise<ConversationAgentResult> {
+  const events = streamConversationAgent(config, context, history, userMessage, options);
+  let step = await events.next();
+  while (!step.done) step = await events.next();
+  return step.value;
 }
 
 function boundedHistory(

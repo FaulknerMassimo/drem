@@ -10,19 +10,26 @@ import type {
   ChatMessage,
   ChatRequest,
   ChatResponse,
+  ChatStreamEvent,
   ConnectionTest,
   EmbedRequest,
   EmbedResponse,
   ProviderConfig,
+  ToolCall,
 } from "../types";
 import { ProviderError } from "./errors";
 import { readVector } from "./vectors";
 import {
   CHAT_TIMEOUT_MS,
+  chatStreamBudget,
   EMBED_TIMEOUT_MS,
   joinUrl,
   requestJson,
+  SSE_DONE,
+  sseData,
+  streamLines,
   TEST_TIMEOUT_MS,
+  type StreamBudget,
 } from "./http";
 
 export async function openaiChat(
@@ -31,31 +38,12 @@ export async function openaiChat(
   fetchImpl: typeof fetch = fetch,
   timeoutMs = CHAT_TIMEOUT_MS,
 ): Promise<ChatResponse> {
-  const body: Record<string, unknown> = {
-    model: request.model,
-    messages: serialiseOpenAiMessages(request),
-    temperature: request.temperature,
-    max_tokens: request.maxTokens,
-  };
-  if (request.tools?.length) {
-    body.tools = request.tools.map((tool) => ({
-      type: "function",
-      function: {
-        name: tool.name,
-        description: tool.description,
-        parameters: tool.parameters,
-      },
-    }));
-    body.tool_choice = "auto";
-  }
-  if (request.json) body.response_format = { type: "json_object" };
-
   const payload = await requestJson(
     joinUrl(config.baseUrl, "/chat/completions"),
     {
       method: "POST",
       headers: openaiHeaders(config),
-      body: JSON.stringify(body),
+      body: JSON.stringify(openaiBody(request, null)),
     },
     fetchImpl,
     timeoutMs,
@@ -76,6 +64,169 @@ export async function openaiChat(
     inputTokens: numberOrUndefined(usage.prompt_tokens),
     outputTokens: numberOrUndefined(usage.completion_tokens),
   };
+}
+
+/**
+ * The same call as Server-Sent Events.
+ *
+ * Retried once without `stream_options` on a 400. Token counts are only
+ * reported on a stream if that field is sent, and it is part of the OpenAI
+ * spec — but "OpenAI-compatible" covers a long tail of servers that reject
+ * fields they do not implement, and losing the whole conversation to a
+ * rejected usage flag would be a poor trade for a number shown under the
+ * answer. A 400 arrives as the response status, before any event, so the retry
+ * cannot replay half an answer.
+ */
+export async function* openaiChatStream(
+  config: ProviderConfig,
+  request: ChatRequest,
+  fetchImpl: typeof fetch = fetch,
+  budget: StreamBudget = chatStreamBudget(),
+): AsyncGenerator<ChatStreamEvent> {
+  try {
+    yield* openaiStream(config, request, fetchImpl, budget, true);
+  } catch (error) {
+    if (!(error instanceof ProviderError) || error.status !== 400) throw error;
+    yield* openaiStream(config, request, fetchImpl, budget, false);
+  }
+}
+
+async function* openaiStream(
+  config: ProviderConfig,
+  request: ChatRequest,
+  fetchImpl: typeof fetch,
+  budget: StreamBudget,
+  withUsage: boolean,
+): AsyncGenerator<ChatStreamEvent> {
+  const partial = new Map<number, { id?: string; name?: string; arguments: string }>();
+  let sawText = false;
+  let usage: ChatStreamEvent | null = null;
+
+  for await (const line of streamLines(
+    joinUrl(config.baseUrl, "/chat/completions"),
+    {
+      method: "POST",
+      headers: openaiHeaders(config),
+      body: JSON.stringify(openaiBody(request, withUsage)),
+    },
+    fetchImpl,
+    budget,
+  )) {
+    const data = sseData(line);
+    if (data === null) continue;
+    if (data === SSE_DONE) break;
+
+    const record = asRecord(data);
+    const delta = asRecord(asRecord(firstChoice(record)).delta);
+    /*
+     * Reasoning has no agreed field name. `reasoning_content` is what the
+     * DeepSeek-style servers emit and what vLLM and LM Studio copied;
+     * `reasoning` is OpenRouter's. Both are read because the alternative is a
+     * chat that looks frozen for a minute against a reasoning model.
+     */
+    const thinking = firstString(delta.reasoning_content, delta.reasoning);
+    if (thinking) yield { type: "thinking", delta: thinking };
+    if (typeof delta.content === "string" && delta.content) {
+      sawText = true;
+      yield { type: "text", delta: delta.content };
+    }
+    collectOpenAiToolDeltas(partial, delta.tool_calls);
+
+    const reported = asRecord(record.usage);
+    if (reported.prompt_tokens !== undefined || reported.completion_tokens !== undefined) {
+      usage = {
+        type: "usage",
+        inputTokens: numberOrUndefined(reported.prompt_tokens),
+        outputTokens: numberOrUndefined(reported.completion_tokens),
+      };
+    }
+  }
+
+  const calls = assembleOpenAiToolCalls(partial);
+  if (calls.length > 0) yield { type: "tool_calls", calls };
+  if (!sawText && calls.length === 0) {
+    throw new ProviderError("The provider returned an empty completion");
+  }
+  if (usage) yield usage;
+}
+
+function firstChoice(record: Record<string, unknown>): unknown {
+  const choices = Array.isArray(record.choices) ? record.choices : [];
+  return choices[0];
+}
+
+function firstString(...values: unknown[]): string {
+  for (const value of values) {
+    if (typeof value === "string" && value) return value;
+  }
+  return "";
+}
+
+/**
+ * Tool calls stream as fragments keyed by `index`: the name arrives once, the
+ * arguments arrive as pieces of a JSON string that is only parseable once the
+ * last piece has landed.
+ */
+function collectOpenAiToolDeltas(
+  partial: Map<number, { id?: string; name?: string; arguments: string }>,
+  value: unknown,
+): void {
+  if (!Array.isArray(value)) return;
+  for (const entry of value) {
+    const record = asRecord(entry);
+    const index = typeof record.index === "number" ? record.index : partial.size;
+    const slot = partial.get(index) ?? { arguments: "" };
+    if (typeof record.id === "string" && record.id) slot.id = record.id;
+    const fn = asRecord(record.function);
+    if (typeof fn.name === "string" && fn.name) slot.name = fn.name;
+    if (typeof fn.arguments === "string") slot.arguments += fn.arguments;
+    partial.set(index, slot);
+  }
+}
+
+function assembleOpenAiToolCalls(
+  partial: Map<number, { id?: string; name?: string; arguments: string }>,
+): ToolCall[] {
+  const calls: ToolCall[] = [];
+  for (const [index, slot] of [...partial.entries()].sort(([a], [b]) => a - b)) {
+    if (!slot.name) continue;
+    let args: unknown = {};
+    if (slot.arguments.trim()) {
+      try {
+        args = JSON.parse(slot.arguments);
+      } catch {
+        args = null;
+      }
+    }
+    calls.push({ id: slot.id || `call_${index}`, name: slot.name, arguments: args });
+  }
+  return calls;
+}
+
+function openaiBody(request: ChatRequest, stream: boolean | null): Record<string, unknown> {
+  const body: Record<string, unknown> = {
+    model: request.model,
+    messages: serialiseOpenAiMessages(request),
+    temperature: request.temperature,
+    max_tokens: request.maxTokens,
+  };
+  if (request.tools?.length) {
+    body.tools = request.tools.map((tool) => ({
+      type: "function",
+      function: {
+        name: tool.name,
+        description: tool.description,
+        parameters: tool.parameters,
+      },
+    }));
+    body.tool_choice = "auto";
+  }
+  if (request.json) body.response_format = { type: "json_object" };
+  if (stream !== null) {
+    body.stream = true;
+    if (stream) body.stream_options = { include_usage: true };
+  }
+  return body;
 }
 
 export async function openaiTest(
@@ -186,7 +337,7 @@ function serialiseOpenAiMessages(request: ChatRequest): unknown[] {
   });
 }
 
-function readOpenAiToolCalls(value: unknown): import("../types").ToolCall[] {
+function readOpenAiToolCalls(value: unknown): ToolCall[] {
   if (!Array.isArray(value)) return [];
   return value.flatMap((entry, index) => {
     const record = asRecord(entry);

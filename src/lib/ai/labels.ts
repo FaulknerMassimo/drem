@@ -62,7 +62,7 @@ export const CONVERSATION_ROLE_LABELS: Record<ConversationRole, string> = {
 };
 
 export const CONVERSATION_ROLE_HINTS: Record<ConversationRole, string> = {
-  chat: "Talk with a model that can inspect dreams, nights, signs, reports and statistics through read-only tools.",
+  chat: "Talk with a model that can inspect dreams, nights, signs, reports and statistics through read-only tools. The chat screen can change this without coming back here.",
 };
 
 export const MODEL_ROLE_LABELS: Record<ModelRole, string> = {
@@ -78,6 +78,36 @@ export const MODEL_ROLE_HINTS: Record<ModelRole, string> = {
   ...SEMANTIC_ROLE_HINTS,
   ...CONVERSATION_ROLE_HINTS,
 };
+
+/**
+ * What each journal tool is doing, for the row that appears while it runs.
+ *
+ * The tool names are the model's interface, not the reader's: "read_dreams"
+ * under a spinner reads like a debug log. Anything not listed falls back to its
+ * own name with the underscores taken out, so a tool added later degrades to
+ * something legible rather than to nothing.
+ */
+export const CHAT_TOOL_LABELS: Record<string, { busy: string; done: string }> = {
+  get_journal_overview: { busy: "Counting the journal", done: "Read the journal totals" },
+  list_dreams: { busy: "Listing dreams", done: "Listed dreams" },
+  read_dreams: { busy: "Reading dreams", done: "Read dreams" },
+  search_dream_text: { busy: "Searching entries", done: "Searched entries" },
+  list_nights: { busy: "Listing nights", done: "Listed nights" },
+  read_night: { busy: "Reading a night", done: "Read a night" },
+  list_dream_signs: { busy: "Listing dream signs", done: "Listed dream signs" },
+  read_dream_sign: { busy: "Reading a dream sign", done: "Read a dream sign" },
+  list_tags: { busy: "Listing tags", done: "Listed tags" },
+  get_statistics: { busy: "Working out statistics", done: "Read statistics" },
+  get_activity: { busy: "Reading activity", done: "Read activity" },
+  list_reports: { busy: "Reading reports", done: "Read reports" },
+  read_dream_insights: { busy: "Reading saved insights", done: "Read saved insights" },
+};
+
+export function chatToolLabel(name: string, done: boolean): string {
+  const known = CHAT_TOOL_LABELS[name];
+  if (known) return done ? known.done : known.busy;
+  return name.replace(/_/gu, " ");
+}
 
 export const PROVIDER_KIND_LABELS: Record<ProviderKind, string> = {
   ollama: "Ollama",

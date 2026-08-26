@@ -3,10 +3,31 @@
  *
  * The system prompt is a top-level field here, not a message, so it is split
  * out of the chat request rather than sent as `role: "system"`.
+ *
+ * Buffered and streamed calls share one request body, so a change to how a
+ * request is built cannot apply to only one of them.
  */
-import type { ChatImage, ChatMessage, ChatRequest, ChatResponse, ConnectionTest, ProviderConfig } from "../types";
+import type {
+  ChatImage,
+  ChatMessage,
+  ChatRequest,
+  ChatResponse,
+  ChatStreamEvent,
+  ConnectionTest,
+  ProviderConfig,
+  ToolCall,
+} from "../types";
 import { ProviderError } from "./errors";
-import { CHAT_TIMEOUT_MS, joinUrl, requestJson, TEST_TIMEOUT_MS } from "./http";
+import {
+  CHAT_TIMEOUT_MS,
+  chatStreamBudget,
+  joinUrl,
+  requestJson,
+  sseData,
+  streamLines,
+  TEST_TIMEOUT_MS,
+  type StreamBudget,
+} from "./http";
 
 const ANTHROPIC_VERSION = "2023-06-01";
 
@@ -28,28 +49,12 @@ export async function anthropicChat(
   fetchImpl: typeof fetch = fetch,
   timeoutMs = CHAT_TIMEOUT_MS,
 ): Promise<ChatResponse> {
-  const { system, messages } = splitSystem(request.messages);
-  const body: Record<string, unknown> = {
-    model: request.model,
-    max_tokens: request.maxTokens,
-    temperature: request.temperature,
-    messages: serialiseAnthropicMessages(messages, request.images),
-  };
-  if (request.tools?.length) {
-    body.tools = request.tools.map((tool) => ({
-      name: tool.name,
-      description: tool.description,
-      input_schema: tool.parameters,
-    }));
-  }
-  if (system) body.system = system;
-
   const payload = await requestJson(
     joinUrl(config.baseUrl, "/v1/messages"),
     {
       method: "POST",
       headers: anthropicHeaders(config),
-      body: JSON.stringify(body),
+      body: JSON.stringify(anthropicBody(request, false)),
     },
     fetchImpl,
     timeoutMs,
@@ -67,6 +72,129 @@ export async function anthropicChat(
     inputTokens: numberOrUndefined(usage.input_tokens),
     outputTokens: numberOrUndefined(usage.output_tokens),
   };
+}
+
+/**
+ * The same call as Server-Sent Events.
+ *
+ * The Messages API streams *blocks* rather than a single delta channel: text,
+ * reasoning and each tool call are separate numbered blocks, opened by a
+ * `content_block_start`, filled by deltas, and closed. A tool call's arguments
+ * arrive as `partial_json` fragments, which are only parseable once its block
+ * closes — which is why tool calls are collected here and emitted whole.
+ */
+export async function* anthropicChatStream(
+  config: ProviderConfig,
+  request: ChatRequest,
+  fetchImpl: typeof fetch = fetch,
+  budget: StreamBudget = chatStreamBudget(),
+): AsyncGenerator<ChatStreamEvent> {
+  const blocks = new Map<number, { name: string; id: string; json: string }>();
+  const calls: ToolCall[] = [];
+  let sawText = false;
+  let inputTokens: number | undefined;
+  let outputTokens: number | undefined;
+
+  for await (const line of streamLines(
+    joinUrl(config.baseUrl, "/v1/messages"),
+    {
+      method: "POST",
+      headers: anthropicHeaders(config),
+      body: JSON.stringify(anthropicBody(request, true)),
+    },
+    fetchImpl,
+    budget,
+  )) {
+    const event = asRecord(sseData(line));
+    const index = typeof event.index === "number" ? event.index : -1;
+
+    if (event.type === "message_start") {
+      const usage = asRecord(asRecord(event.message).usage);
+      inputTokens = numberOrUndefined(usage.input_tokens) ?? inputTokens;
+      continue;
+    }
+    if (event.type === "content_block_start") {
+      const block = asRecord(event.content_block);
+      if (block.type === "tool_use" && typeof block.name === "string") {
+        blocks.set(index, {
+          name: block.name,
+          id: typeof block.id === "string" ? block.id : `call_${index}`,
+          json: "",
+        });
+      }
+      continue;
+    }
+    if (event.type === "content_block_delta") {
+      const delta = asRecord(event.delta);
+      if (delta.type === "text_delta" && typeof delta.text === "string" && delta.text) {
+        sawText = true;
+        yield { type: "text", delta: delta.text };
+      } else if (delta.type === "thinking_delta" && typeof delta.thinking === "string" && delta.thinking) {
+        yield { type: "thinking", delta: delta.thinking };
+      } else if (delta.type === "input_json_delta" && typeof delta.partial_json === "string") {
+        const block = blocks.get(index);
+        if (block) block.json += delta.partial_json;
+      }
+      continue;
+    }
+    if (event.type === "content_block_stop") {
+      const block = blocks.get(index);
+      if (block) {
+        blocks.delete(index);
+        calls.push({ id: block.id, name: block.name, arguments: parseToolInput(block.json) });
+      }
+      continue;
+    }
+    if (event.type === "message_delta") {
+      const usage = asRecord(event.usage);
+      outputTokens = numberOrUndefined(usage.output_tokens) ?? outputTokens;
+      continue;
+    }
+    /*
+     * An `error` event carries a message from the provider, and provider
+     * messages on this API quote the request back. It is reported by type
+     * only, for the same reason `requestJson` never reads an error body.
+     */
+    if (event.type === "error") {
+      throw new ProviderError("Anthropic reported an error part-way through the answer");
+    }
+  }
+
+  if (calls.length > 0) yield { type: "tool_calls", calls };
+  if (!sawText && calls.length === 0) {
+    throw new ProviderError("Anthropic returned an empty completion");
+  }
+  yield { type: "usage", inputTokens, outputTokens };
+}
+
+function anthropicBody(request: ChatRequest, stream: boolean): Record<string, unknown> {
+  const { system, messages } = splitSystem(request.messages);
+  const body: Record<string, unknown> = {
+    model: request.model,
+    max_tokens: request.maxTokens,
+    temperature: request.temperature,
+    messages: serialiseAnthropicMessages(messages, request.images),
+  };
+  if (request.tools?.length) {
+    body.tools = request.tools.map((tool) => ({
+      name: tool.name,
+      description: tool.description,
+      input_schema: tool.parameters,
+    }));
+  }
+  if (system) body.system = system;
+  if (stream) body.stream = true;
+  return body;
+}
+
+/** An unparseable argument becomes null, which every tool then rejects. */
+function parseToolInput(json: string): unknown {
+  if (!json.trim()) return {};
+  try {
+    return JSON.parse(json);
+  } catch {
+    return null;
+  }
 }
 
 export async function anthropicTest(
@@ -188,7 +316,7 @@ function readAnthropicText(content: unknown): string {
   return parts.join("");
 }
 
-function readAnthropicToolCalls(content: unknown): import("../types").ToolCall[] {
+function readAnthropicToolCalls(content: unknown): ToolCall[] {
   if (!Array.isArray(content)) return [];
   return content.flatMap((block) => {
     const record = asRecord(block);

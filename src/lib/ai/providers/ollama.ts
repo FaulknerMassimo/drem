@@ -4,23 +4,32 @@
  * Talks to the native `/api/chat` and `/api/tags` endpoints rather than the
  * OpenAI-compatible shim, so a stock Ollama install works without extra flags.
  * `format: "json"` is what extraction uses to keep the model on-schema.
+ *
+ * Both call shapes are here: the buffered one the queued jobs use, and the
+ * streamed one journal chat uses, sharing a single request body so a change to
+ * how a request is built cannot apply to only one of them.
  */
 import type {
   ChatRequest,
   ChatResponse,
+  ChatStreamEvent,
   ConnectionTest,
   EmbedRequest,
   EmbedResponse,
   ProviderConfig,
+  ToolCall,
 } from "../types";
 import { ProviderError } from "./errors";
 import { readVectors } from "./vectors";
 import {
   CHAT_TIMEOUT_MS,
+  chatStreamBudget,
   EMBED_TIMEOUT_MS,
   joinUrl,
   requestJson,
+  streamLines,
   TEST_TIMEOUT_MS,
+  type StreamBudget,
 } from "./http";
 
 export async function ollamaChat(
@@ -29,10 +38,97 @@ export async function ollamaChat(
   fetchImpl: typeof fetch = fetch,
   timeoutMs = CHAT_TIMEOUT_MS,
 ): Promise<ChatResponse> {
+  const payload = await requestJson(
+    joinUrl(config.baseUrl, "/api/chat"),
+    {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify(ollamaBody(request, false)),
+    },
+    fetchImpl,
+    timeoutMs,
+  );
+
+  const record = asRecord(payload);
+  const message = asRecord(record.message);
+  const text = typeof message.content === "string" ? message.content : "";
+  const toolCalls = readOllamaToolCalls(message.tool_calls, 0);
+  if (!text && toolCalls.length === 0) {
+    const thought = typeof message.thinking === "string" && message.thinking.length > 0;
+    throw new ProviderError(emptyCompletionReason(record, thought));
+  }
+
+  return {
+    text,
+    toolCalls: toolCalls.length > 0 ? toolCalls : undefined,
+    inputTokens: numberOrUndefined(record.prompt_eval_count),
+    outputTokens: numberOrUndefined(record.eval_count),
+  };
+}
+
+/**
+ * The same call, streamed.
+ *
+ * `/api/chat` answers with one JSON object per line rather than SSE, and the
+ * shape of each line is the shape of the buffered reply's `message` — so the
+ * only real difference from `ollamaChat` is that `content`, `thinking` and
+ * `tool_calls` arrive in pieces, and the token counts ride on the final line
+ * where `done` is true.
+ */
+export async function* ollamaChatStream(
+  config: ProviderConfig,
+  request: ChatRequest,
+  fetchImpl: typeof fetch = fetch,
+  budget: StreamBudget = chatStreamBudget(),
+): AsyncGenerator<ChatStreamEvent> {
+  const calls: ToolCall[] = [];
+  let sawContent = false;
+  let thought = false;
+
+  for await (const line of streamLines(
+    joinUrl(config.baseUrl, "/api/chat"),
+    {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify(ollamaBody(request, true)),
+    },
+    fetchImpl,
+    budget,
+  )) {
+    const record = asRecord(parseLine(line));
+    const message = asRecord(record.message);
+
+    if (typeof message.thinking === "string" && message.thinking) {
+      thought = true;
+      yield { type: "thinking", delta: message.thinking };
+    }
+    if (typeof message.content === "string" && message.content) {
+      sawContent = true;
+      yield { type: "text", delta: message.content };
+    }
+    for (const call of readOllamaToolCalls(message.tool_calls, calls.length)) {
+      calls.push(call);
+    }
+
+    if (record.done === true) {
+      if (calls.length > 0) yield { type: "tool_calls", calls };
+      if (!sawContent && calls.length === 0) {
+        throw new ProviderError(emptyCompletionReason(record, thought));
+      }
+      yield {
+        type: "usage",
+        inputTokens: numberOrUndefined(record.prompt_eval_count),
+        outputTokens: numberOrUndefined(record.eval_count),
+      };
+    }
+  }
+}
+
+function ollamaBody(request: ChatRequest, stream: boolean): Record<string, unknown> {
   const body: Record<string, unknown> = {
     model: request.model,
     messages: serialiseOllamaMessages(request),
-    stream: false,
+    stream,
     options: {
       temperature: request.temperature,
       num_predict: request.maxTokens,
@@ -66,30 +162,16 @@ export async function ollamaChat(
    * that starts asking for reasoning has to check first.
    */
   if (request.think !== undefined) body.think = request.think;
+  return body;
+}
 
-  const payload = await requestJson(
-    joinUrl(config.baseUrl, "/api/chat"),
-    {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify(body),
-    },
-    fetchImpl,
-    timeoutMs,
-  );
-
-  const record = asRecord(payload);
-  const message = asRecord(record.message);
-  const text = typeof message.content === "string" ? message.content : "";
-  const toolCalls = readOllamaToolCalls(message.tool_calls);
-  if (!text && toolCalls.length === 0) throw new ProviderError(emptyCompletionReason(record, message));
-
-  return {
-    text,
-    toolCalls: toolCalls.length > 0 ? toolCalls : undefined,
-    inputTokens: numberOrUndefined(record.prompt_eval_count),
-    outputTokens: numberOrUndefined(record.eval_count),
-  };
+/** A malformed line is dropped rather than thrown on: the stream carries on. */
+function parseLine(line: string): unknown {
+  try {
+    return JSON.parse(line);
+  } catch {
+    return {};
+  }
 }
 
 export async function ollamaTest(
@@ -126,11 +208,7 @@ export async function ollamaTest(
  * The reasoning itself is never quoted — it is derived from the dream, and this
  * message is persisted on the job.
  */
-function emptyCompletionReason(
-  record: Record<string, unknown>,
-  message: Record<string, unknown>,
-): string {
-  const thought = typeof message.thinking === "string" && message.thinking.length > 0;
+function emptyCompletionReason(record: Record<string, unknown>, thought: boolean): string {
   const truncated = record.done_reason === "length";
   if (thought || truncated) {
     return "The model used its whole token budget before answering. Try a model that does not think, or a shorter period.";
@@ -156,7 +234,12 @@ function serialiseOllamaMessages(request: ChatRequest): unknown[] {
   });
 }
 
-function readOllamaToolCalls(value: unknown): import("../types").ToolCall[] {
+/**
+ * Ollama issues no id of its own, so one is minted from the call's position.
+ * `offset` is how many calls this turn has already collected, which is what
+ * keeps ids unique when the calls arrive over several streamed lines.
+ */
+function readOllamaToolCalls(value: unknown, offset: number): ToolCall[] {
   if (!Array.isArray(value)) return [];
   return value.flatMap((entry, index) => {
     const fn = asRecord(asRecord(entry).function);
@@ -169,7 +252,7 @@ function readOllamaToolCalls(value: unknown): import("../types").ToolCall[] {
         args = null;
       }
     }
-    return [{ id: `ollama_call_${index}`, name: fn.name, arguments: args }];
+    return [{ id: `ollama_call_${offset + index}`, name: fn.name, arguments: args }];
   });
 }
 

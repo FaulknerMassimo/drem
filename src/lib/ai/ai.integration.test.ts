@@ -140,6 +140,13 @@ describe("encrypted config and insights", () => {
 });
 
 describe("journal chat", () => {
+  /** Ollama streams one JSON object per line; the last one carries the counts. */
+  function ndjson(...lines: unknown[]): Response {
+    return new Response(lines.map((line) => JSON.stringify(line)).join("\n"), {
+      headers: { "content-type": "application/x-ndjson" },
+    });
+  }
+
   it("uses a read-only dream tool and stores only an encrypted final transcript", async () => {
     const dreamId = await createDream(
       userId,
@@ -149,20 +156,26 @@ describe("journal chat", () => {
     await assignLocalModel();
     const fetchImpl = vi.fn(async (_url: string | URL | Request, init?: RequestInit) => {
       const body = JSON.parse(String(init?.body));
+      expect(body.stream).toBe(true);
       const toolResult = body.messages.find((message: { role: string }) => message.role === "tool");
       if (!toolResult) {
         expect(body.tools.some((tool: { function: { name: string } }) => tool.function.name === "read_dreams")).toBe(true);
-        return new Response(JSON.stringify({
-          message: {
-            content: "",
-            tool_calls: [{ function: { name: "read_dreams", arguments: { ids: [dreamId] } } }],
+        return ndjson(
+          {
+            message: {
+              content: "",
+              tool_calls: [{ function: { name: "read_dreams", arguments: { ids: [dreamId] } } }],
+            },
           },
-        }), { headers: { "content-type": "application/json" } });
+          { done: true },
+        );
       }
       expect(toolResult.content).toContain(CANARY);
-      return new Response(JSON.stringify({ message: { content: "A grounded answer." } }), {
-        headers: { "content-type": "application/json" },
-      });
+      return ndjson(
+        { message: { content: "A grounded " } },
+        { message: { content: "answer." } },
+        { done: true, prompt_eval_count: 12, eval_count: 4 },
+      );
     });
     vi.stubGlobal("fetch", fetchImpl);
 
@@ -175,6 +188,7 @@ describe("journal chat", () => {
     );
     expect(answer.text).toBe("A grounded answer.");
     expect(answer.toolCalls).toBe(1);
+    expect(answer.outputTokens).toBe(4);
 
     const threadId = await saveConversationExchange(userId, keys, null, {
       user: `What happened in ${CANARY}?`,
@@ -189,6 +203,74 @@ describe("journal chat", () => {
     for (const row of stored) {
       expect(Buffer.from(row.contentEnc).toString("utf8")).not.toContain(CANARY);
     }
+  });
+
+  it("keeps the prose a model writes before it reaches for a tool", async () => {
+    // The old loop returned the last round only, so a model that said what it
+    // was about to look up had that sentence vanish from the saved transcript.
+    await assignLocalModel();
+    let round = 0;
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => {
+        round += 1;
+        if (round === 1) {
+          return ndjson(
+            { message: { content: "Let me check your lucid nights." } },
+            {
+              message: {
+                content: "",
+                tool_calls: [{ function: { name: "get_journal_overview", arguments: {} } }],
+              },
+            },
+            { done: true },
+          );
+        }
+        return ndjson({ message: { content: "You had two." } }, { done: true });
+      }),
+    );
+
+    const answer = await runConversationAgent(
+      await loadAiConfig(userId, keys),
+      { userId, keys },
+      [],
+      "How many lucid nights?",
+    );
+    expect(answer.text).toBe("Let me check your lucid nights.\n\nYou had two.");
+  });
+
+  it("keeps what was written when the reader stops the answer", async () => {
+    await assignLocalModel();
+    const stop = new AbortController();
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (_url: string | URL | Request, init?: RequestInit) => {
+        // A stream that never ends on its own, so only the stop can end it.
+        const body = new ReadableStream<Uint8Array>({
+          start(controller) {
+            controller.enqueue(
+              new TextEncoder().encode(`${JSON.stringify({ message: { content: "Half an " } })}\n`),
+            );
+            init?.signal?.addEventListener("abort", () => controller.error(new Error("aborted")));
+          },
+        });
+        return new Response(body);
+      }),
+    );
+
+    const running = runConversationAgent(
+      await loadAiConfig(userId, keys),
+      { userId, keys },
+      [],
+      "Tell me about last week",
+      { signal: stop.signal },
+    );
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    stop.abort();
+
+    const answer = await running;
+    expect(answer.stopped).toBe(true);
+    expect(answer.text).toBe("Half an");
   });
 });
 

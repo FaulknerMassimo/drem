@@ -169,12 +169,26 @@ export interface ChatToolContext {
   keys: UserKeys;
 }
 
+/**
+ * What one tool call produced.
+ *
+ * `ok` is separate from the JSON because the conversation screen shows each
+ * tool as it runs, and "read four dreams" and "that tool call was rejected"
+ * are different things to a reader watching it happen. Sniffing the JSON for
+ * an `error` key would work until a tool legitimately returns one.
+ */
+export interface ChatToolResult {
+  ok: boolean;
+  /** JSON, and the only thing the model is shown. */
+  json: string;
+}
+
 /** Executes one validated tool call and returns a bounded JSON result. */
 export async function executeJournalChatTool(
   context: ChatToolContext,
   name: string,
   rawArguments: unknown,
-): Promise<string> {
+): Promise<ChatToolResult> {
   try {
     let result: unknown;
     if (name === "get_journal_overview") {
@@ -224,13 +238,16 @@ export async function executeJournalChatTool(
       const { dream_id } = insightArgs.parse(rawArguments);
       result = await insightsForDream(context.userId, context.keys, dream_id);
     } else {
-      return JSON.stringify({ error: "That tool is not available." });
+      return { ok: false, json: JSON.stringify({ error: "That tool is not available." }) };
     }
-    return JSON.stringify(result);
+    return { ok: true, json: JSON.stringify(result) };
   } catch {
     // Validation and database errors must not echo model arguments: those can
     // contain a name or phrase copied from a dream.
-    return JSON.stringify({ error: "The tool arguments were invalid or the data could not be read." });
+    return {
+      ok: false,
+      json: JSON.stringify({ error: "The tool arguments were invalid or the data could not be read." }),
+    };
   }
 }
 

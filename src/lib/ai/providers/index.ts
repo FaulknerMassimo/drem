@@ -5,13 +5,15 @@
  * that already has its URL and key resolved; this module does not read the
  * environment or the database.
  */
-import { anthropicChat, anthropicEmbed, anthropicTest } from "./anthropic";
+import { anthropicChat, anthropicChatStream, anthropicEmbed, anthropicTest } from "./anthropic";
 import { explainImageRejection } from "./errors";
-import { ollamaChat, ollamaEmbed, ollamaTest } from "./ollama";
-import { openaiChat, openaiEmbed, openaiTest } from "./openai";
+import type { StreamBudget } from "./http";
+import { ollamaChat, ollamaChatStream, ollamaEmbed, ollamaTest } from "./ollama";
+import { openaiChat, openaiChatStream, openaiEmbed, openaiTest } from "./openai";
 import type {
   ChatRequest,
   ChatResponse,
+  ChatStreamEvent,
   ConnectionTest,
   EmbedRequest,
   EmbedResponse,
@@ -30,6 +32,28 @@ export async function providerChat(
     return await anthropicChat(config, request, fetchImpl, timeoutMs);
   } catch (error) {
     // `await` above rather than a bare return, so the rejection lands here.
+    throw explainImageRejection(request.model, Boolean(request.images?.length), error);
+  }
+}
+
+/**
+ * The same dispatch for a streamed answer.
+ *
+ * Separate from `providerChat` rather than a flag on it because the two return
+ * different things and the callers want different ones: a queued job wants the
+ * finished text to file, and a conversation wants the pieces as they arrive.
+ */
+export async function* providerChatStream(
+  config: ProviderConfig,
+  request: ChatRequest,
+  fetchImpl: typeof fetch = fetch,
+  budget?: StreamBudget,
+): AsyncGenerator<ChatStreamEvent> {
+  try {
+    if (config.kind === "ollama") yield* ollamaChatStream(config, request, fetchImpl, budget);
+    else if (config.kind === "openai") yield* openaiChatStream(config, request, fetchImpl, budget);
+    else yield* anthropicChatStream(config, request, fetchImpl, budget);
+  } catch (error) {
     throw explainImageRejection(request.model, Boolean(request.images?.length), error);
   }
 }

@@ -5,11 +5,17 @@
  * the call to the matching adapter. The destination is returned alongside the
  * completion so the worker can record *where* the dream went without having to
  * reconstruct it.
+ *
+ * Two ways out: `completeRole` for a queued job, which wants the finished text,
+ * and `streamRole` for the conversation, which wants the pieces as they arrive.
+ * Both resolve the call the same way, so a role that is refused for one is
+ * refused for the other.
  */
 import "server-only";
-import { destinationFor } from "./destination";
-import { providerChat } from "./providers";
+import { destinationForAssignment } from "./destination";
+import { providerChat, providerChatStream } from "./providers";
 import {
+  chatStreamBudget,
   OCR_TIMEOUT_MS,
   REPORT_TIMEOUT_MS,
   SCAN_TIMEOUT_MS,
@@ -20,10 +26,15 @@ import type {
   AiConfig,
   ChatImage,
   ChatMessage,
+  ChatRequest,
   ChatResponse,
   ChatRole,
+  ChatStreamEvent,
+  ChatTool,
   Destination,
   ModelRole,
+  ProviderConfig,
+  RoleAssignment,
 } from "./types";
 
 export class RoleNotConfiguredError extends Error {
@@ -106,38 +117,107 @@ export async function completeRole(
   config: AiConfig,
   role: ChatRole,
   messages: ChatMessage[],
-  options: {
-    json?: boolean;
-    jsonSchema?: Record<string, unknown>;
-    images?: ChatImage[];
-    budget?: ChatBudget;
-    tools?: import("./types").ChatTool[];
-  } = {},
+  options: CallOptions = {},
 ): Promise<{ response: ChatResponse; destination: Destination }> {
-  const destination = destinationFor(config, role);
-  if (!destination.configured) throw new RoleNotConfiguredError(role);
-
-  const assignment = resolveRoles(config)[role];
-  const provider = config.providers.find((candidate) => candidate.id === assignment?.providerId);
-  if (!provider || !assignment) throw new RoleNotConfiguredError(role);
-
-  const timeoutMs = options.budget?.timeoutMs ?? TIMEOUTS[role];
+  const call = resolveCall(config, role, options.assignment ?? null);
   const response = await providerChat(
-    provider,
-    {
-      model: assignment.model,
-      messages,
-      maxTokens: options.budget?.maxTokens ?? MAX_TOKENS[role],
-      temperature: TEMPERATURE[role],
-      json: options.json,
-      jsonSchema: options.jsonSchema,
-      images: options.images,
-      think: THINKING[role],
-      tools: options.tools,
-    },
+    call.provider,
+    request(call, role, messages, options),
     globalThis.fetch,
-    timeoutMs,
+    options.budget?.timeoutMs ?? TIMEOUTS[role],
   );
 
-  return { response, destination };
+  return { response, destination: call.destination };
+}
+
+/**
+ * The same call, streamed.
+ *
+ * Not `async`, deliberately: the destination is known from the config alone,
+ * and the screen has to be able to name it *before* the first token — the same
+ * rule the badge follows everywhere else. Awaiting a promise for it would put
+ * the destination and the first piece of the answer on screen together.
+ *
+ * `assignment` overrides the role's stored model for this one call, which is
+ * what the model picker on the chat screen sends. It is resolved through the
+ * same code as the stored one, so an unknown or disabled provider is refused
+ * here rather than reaching an adapter.
+ */
+export function streamRole(
+  config: AiConfig,
+  role: ChatRole,
+  messages: ChatMessage[],
+  options: {
+    tools?: ChatTool[];
+    budget?: ChatBudget;
+    assignment?: RoleAssignment | null;
+    signal?: AbortSignal;
+  } = {},
+): { destination: Destination; events: AsyncGenerator<ChatStreamEvent> } {
+  const call = resolveCall(config, role, options.assignment ?? null);
+  return {
+    destination: call.destination,
+    events: providerChatStream(
+      call.provider,
+      request(call, role, messages, options),
+      globalThis.fetch,
+      chatStreamBudget(options.signal),
+    ),
+  };
+}
+
+interface ResolvedCall {
+  provider: ProviderConfig;
+  assignment: RoleAssignment;
+  destination: Destination;
+}
+
+function resolveCall(
+  config: AiConfig,
+  role: ChatRole,
+  override: RoleAssignment | null,
+): ResolvedCall {
+  const assignment = override ?? resolveRoles(config)[role];
+  const destination = destinationForAssignment(config, role, assignment);
+  const provider = config.providers.find((candidate) => candidate.id === assignment?.providerId);
+  if (!destination.configured || !provider || !assignment) throw new RoleNotConfiguredError(role);
+  return { provider, assignment, destination };
+}
+
+interface CallOptions {
+  json?: boolean;
+  jsonSchema?: Record<string, unknown>;
+  images?: ChatImage[];
+  budget?: ChatBudget;
+  tools?: ChatTool[];
+  /** Overrides the role's stored model for this one call. */
+  assignment?: RoleAssignment | null;
+  /**
+   * Overrides `THINKING` for one call.
+   *
+   * The role's entry is about what the role is *for*; this is about what a
+   * particular call can afford. Naming a conversation is the case it exists
+   * for: a two-dozen-token budget is spent before a reasoning model has
+   * finished considering the question, and comes back empty.
+   */
+  think?: boolean;
+}
+
+function request(
+  call: ResolvedCall,
+  role: ChatRole,
+  messages: ChatMessage[],
+  options: CallOptions,
+): ChatRequest {
+  return {
+    model: call.assignment.model,
+    messages,
+    maxTokens: options.budget?.maxTokens ?? MAX_TOKENS[role],
+    temperature: TEMPERATURE[role],
+    json: options.json,
+    jsonSchema: options.jsonSchema,
+    images: options.images,
+    think: options.think ?? THINKING[role],
+    tools: options.tools,
+  };
 }

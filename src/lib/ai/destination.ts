@@ -8,7 +8,7 @@
  * localhost heuristic without standing up a provider.
  */
 import { resolveRoles } from "./schema";
-import type { AiConfig, Destination, ModelRole, ProviderKind } from "./types";
+import type { AiConfig, Destination, ModelRole, ProviderKind, RoleAssignment } from "./types";
 
 const LOCAL_HOSTS = new Set([
   "localhost",
@@ -40,7 +40,23 @@ export function leavesMachine(kind: ProviderKind, baseUrl: string): boolean {
 }
 
 export function destinationFor(config: AiConfig, role: ModelRole): Destination {
-  const assignment = resolveRoles(config)[role];
+  return destinationForAssignment(config, role, resolveRoles(config)[role]);
+}
+
+/**
+ * The destination for a role if it were pointed at `assignment`.
+ *
+ * Journal chat lets the model be chosen on the chat screen rather than in
+ * Settings, so the badge has to be able to describe a pairing that is not the
+ * stored one — and the server has to be able to check that same pairing before
+ * it sends anything. Both go through here, so the badge and the check cannot
+ * disagree about where a message is going.
+ */
+export function destinationForAssignment(
+  config: AiConfig,
+  role: ModelRole,
+  assignment: RoleAssignment | null,
+): Destination {
   const empty: Destination = {
     role,
     configured: false,

@@ -268,7 +268,24 @@ them.
 - **`crypto.randomUUID()` is secure-context only**, and the offline capture
   queue mints ids on a phone that is very often on a plain-HTTP LAN origin. Use
   `randomUuid()` from `src/lib/random-id.ts`. This is the same trap the stack-id
-  fix already paid for once.
+  fix already paid for once. `navigator.clipboard` is gated the same way and is
+  simply `undefined` there — the copy button on a chat answer checks for it
+  after mount rather than during render, so the markup does not disagree with
+  itself on a machine where it exists.
+- **A streamed answer is bounded on silence, not on elapsed time.** The single
+  `CHAT_TIMEOUT_MS` that every queued job uses is right for a job and wrong for
+  a conversation: it cut large models off mid-answer while they were still
+  working, which is exactly the failure it looks like it is preventing.
+  `streamLines` takes three budgets instead — first byte, then between bytes,
+  then an outer ceiling — and enforces them itself rather than trusting the
+  abort signal to reach the body, because a hung read is the one case where it
+  would not. Collapsing them back into one reintroduces the bug.
+- **Journal chat is the one screen that needs JavaScript.** Everything else
+  works as a native form POST, and this deliberately does not: an answer that
+  appears as it is written cannot come from a Server Action, which resolves
+  once. The route handler at `/api/chat` re-checks the session, the CSRF token
+  and the destination gate itself, because none of Next's Server Action
+  protections apply to it.
 - **The service worker caches the capture shell and static assets, nothing
   else.** Every other route renders decrypted dream text, and a cached copy of
   one would be plaintext in the browser's cache directory, surviving lock,

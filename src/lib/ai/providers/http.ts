@@ -1,10 +1,11 @@
 /**
- * JSON fetch wrapper for provider adapters.
+ * HTTP for provider adapters: one buffered call, one streamed one.
  *
- * Two jobs: apply a timeout, and make sure a failure cannot leak the request
- * or the response. Chat APIs routinely echo the prompt in error bodies.
+ * Two jobs, and they are the same for both: bound how long a call may take,
+ * and make sure a failure cannot leak the request or the response. Chat APIs
+ * routinely echo the prompt in error bodies, so no error body is ever read.
  */
-import { describeNetworkError, ProviderError } from "./errors";
+import { describeNetworkError, hostOfUrl, ProviderError, StreamStoppedError } from "./errors";
 
 export const TEST_TIMEOUT_MS = 10_000;
 export const CHAT_TIMEOUT_MS = 120_000;
@@ -82,4 +83,191 @@ export async function requestJson(
 
 export function joinUrl(base: string, path: string): string {
   return `${base.replace(/\/+$/, "")}/${path.replace(/^\/+/, "")}`;
+}
+
+/**
+ * The three budgets a *streamed* answer is held to.
+ *
+ * A single total timeout is the wrong shape for a conversation. `CHAT_TIMEOUT_MS`
+ * is 120s because that is a fair ceiling on one buffered call, and against a
+ * large model it cut the reply off mid-thought: the model was working the whole
+ * time, and the budget was measuring how long the answer *is* rather than
+ * whether anything is still happening. A stream can tell those apart, so it is
+ * bounded on silence instead.
+ *
+ * `firstByteMs` is separate and generous because nothing at all comes back
+ * while a cold model is being paged into VRAM, which on a large local model is
+ * minutes before the first token. `idleMs` then applies between tokens, where
+ * silence really does mean something has gone wrong. `totalMs` exists only so a
+ * stream that drips forever cannot hold a connection open for a day.
+ */
+export interface StreamBudget {
+  /** How long to wait for the first byte. Covers a cold model being loaded. */
+  firstByteMs: number;
+  /** How long the stream may then go silent before it is abandoned. */
+  idleMs: number;
+  /** A ceiling regardless of progress. */
+  totalMs: number;
+  /** The reader's own stop: a Stop button, or a closed tab. */
+  signal?: AbortSignal;
+}
+
+export const CHAT_FIRST_TOKEN_TIMEOUT_MS = 300_000;
+export const CHAT_IDLE_TIMEOUT_MS = 120_000;
+export const CHAT_TOTAL_TIMEOUT_MS = 1_800_000;
+
+export function chatStreamBudget(signal?: AbortSignal): StreamBudget {
+  return {
+    firstByteMs: CHAT_FIRST_TOKEN_TIMEOUT_MS,
+    idleMs: CHAT_IDLE_TIMEOUT_MS,
+    totalMs: CHAT_TOTAL_TIMEOUT_MS,
+    signal,
+  };
+}
+
+type StreamStall = "first-byte" | "idle" | "total";
+
+/**
+ * Yields a streamed response one line at a time.
+ *
+ * Both wire formats in use here are line-oriented — Ollama sends one JSON
+ * object per line, OpenAI and Anthropic send SSE, whose payload is always a
+ * single `data:` line — so line framing is the whole parser this needs. Blank
+ * lines and SSE's `event:` lines are dropped: every event carries its own type
+ * inside the JSON, so the separators say nothing the payload does not.
+ *
+ * As with `requestJson`, an error body is drained and never read: chat APIs
+ * routinely echo the prompt back inside their errors.
+ */
+export async function* streamLines(
+  url: string,
+  init: RequestInit,
+  fetchImpl: typeof fetch,
+  budget: StreamBudget,
+): AsyncGenerator<string> {
+  const controller = new AbortController();
+  let stall: StreamStall | null = null;
+  const stop = (reason: StreamStall) => {
+    stall = reason;
+    controller.abort();
+  };
+
+  let quiet = setTimeout(() => stop("first-byte"), budget.firstByteMs);
+  const whole = setTimeout(() => stop("total"), budget.totalMs);
+  const relay = () => controller.abort();
+  budget.signal?.addEventListener("abort", relay, { once: true });
+  const fail = (error: unknown): never => {
+    if (budget.signal?.aborted) throw new StreamStoppedError();
+    throw new ProviderError(describeStreamStall(url, error, stall, budget));
+  };
+
+  try {
+    let response: Response;
+    try {
+      response = await fetchImpl(url, { ...init, signal: controller.signal });
+    } catch (error) {
+      fail(error);
+      return;
+    }
+    if (!response.ok) {
+      await response.text().catch(() => undefined);
+      throw new ProviderError(`The provider returned HTTP ${response.status}`, response.status);
+    }
+    if (!response.body) throw new ProviderError("The provider returned an empty response body");
+
+    const reader = response.body.getReader();
+    const decoder = new TextDecoder();
+    let buffer = "";
+    /*
+     * The budgets are enforced here rather than left to the abort signal alone.
+     * Aborting a fetch is *supposed* to error the body it handed back, and does
+     * — but that makes the ceiling on a silent stream depend on the transport
+     * propagating it, which is the one part of this nobody can test and the
+     * exact case where a hung read would otherwise wait forever.
+     */
+    const aborted = new Promise<never>((_, reject) => {
+      controller.signal.addEventListener(
+        "abort",
+        () => reject(new Error("The stream was ended before it finished")),
+        { once: true },
+      );
+    });
+
+    for (;;) {
+      let chunk: ReadableStreamReadResult<Uint8Array>;
+      try {
+        chunk = await Promise.race([reader.read(), aborted]);
+      } catch (error) {
+        fail(error);
+        return;
+      }
+      clearTimeout(quiet);
+      if (chunk.done) break;
+      quiet = setTimeout(() => stop("idle"), budget.idleMs);
+
+      buffer += decoder.decode(chunk.value, { stream: true });
+      let newline = buffer.indexOf("\n");
+      while (newline >= 0) {
+        const line = buffer.slice(0, newline).replace(/\r$/u, "");
+        buffer = buffer.slice(newline + 1);
+        if (line) yield line;
+        newline = buffer.indexOf("\n");
+      }
+    }
+    // Flushes any bytes of a character the stream ended in the middle of.
+    const tail = (buffer + decoder.decode()).trim();
+    if (tail) yield tail;
+  } finally {
+    clearTimeout(quiet);
+    clearTimeout(whole);
+    budget.signal?.removeEventListener("abort", relay);
+    // Releases the socket when the consumer stops reading early — a tool round
+    // that has seen everything it needs, or a reader who pressed Stop.
+    controller.abort();
+  }
+}
+
+/**
+ * Why a stream ended without finishing.
+ *
+ * The distinction the reader needs is the one a single timeout cannot make:
+ * a model that never started is a different problem from one that stopped
+ * halfway, and both are different from a host that is not there at all.
+ */
+function describeStreamStall(
+  url: string,
+  error: unknown,
+  stall: StreamStall | null,
+  budget: StreamBudget,
+): string {
+  const host = hostOfUrl(url);
+  const seconds = (ms: number) => `${Math.round(ms / 1000)}s`;
+  if (stall === "first-byte") return `${host} did not start answering within ${seconds(budget.firstByteMs)}`;
+  if (stall === "idle") return `${host} stopped sending after ${seconds(budget.idleMs)} of silence`;
+  if (stall === "total") return `${host} was still answering after ${seconds(budget.totalMs)}`;
+  return describeNetworkError(url, error);
+}
+
+/** The sentinel OpenAI-compatible servers close a stream with. */
+export const SSE_DONE = Symbol("sse-done");
+
+/**
+ * The payload of one SSE line, or null for a line that carries none.
+ *
+ * `event:` lines and comments are skipped rather than parsed: both providers
+ * that speak SSE here also put the event's type inside the JSON, so the
+ * framing adds nothing a parser needs. A line that will not parse is dropped
+ * for the same reason a malformed Ollama line is — one bad frame is not a
+ * reason to abandon an answer that is still arriving.
+ */
+export function sseData(line: string): unknown {
+  if (!line.startsWith("data:")) return null;
+  const payload = line.slice(5).trim();
+  if (!payload) return null;
+  if (payload === "[DONE]") return SSE_DONE;
+  try {
+    return JSON.parse(payload);
+  } catch {
+    return null;
+  }
 }

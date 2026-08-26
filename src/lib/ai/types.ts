@@ -152,6 +152,24 @@ export interface ChatResponse {
 }
 
 /**
+ * One piece of an answer as it is being written.
+ *
+ * `thinking` is the model's private working, which several models emit on a
+ * channel of its own. It is shown to the reader as it arrives and then
+ * collapsed — it is never persisted, and never fed back to the model, because
+ * it is derived from the journal and worth nothing once the answer exists.
+ *
+ * Tool calls arrive complete rather than as deltas: two of the three wire
+ * formats stream the arguments as JSON fragments, which are unusable until the
+ * last one lands, and a half-parsed argument is not something to show anybody.
+ */
+export type ChatStreamEvent =
+  | { type: "thinking"; delta: string }
+  | { type: "text"; delta: string }
+  | { type: "tool_calls"; calls: ToolCall[] }
+  | { type: "usage"; inputTokens?: number; outputTokens?: number };
+
+/**
  * A batch of texts to embed.
  *
  * Batched because a backfill embeds hundreds of entries, and one request per
@@ -191,4 +209,20 @@ export interface Destination {
   host: string;
   /** One line, suitable for a badge. */
   label: string;
+}
+
+/**
+ * A provider the chat model picker can offer, and what it can be pointed at.
+ *
+ * Computed on the server so the picker can say where each choice would send a
+ * message without the locality rules — or the decrypted config — reaching the
+ * browser.
+ */
+export interface ChatModelOption {
+  providerId: string;
+  providerName: string;
+  providerKind: ProviderKind;
+  host: string;
+  leavesMachine: boolean;
+  models: string[];
 }

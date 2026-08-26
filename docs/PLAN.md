@@ -73,6 +73,34 @@ Deviations from the original plan, all deliberate:
   export is sealed by its passphrase alone — the single deliberate weakening in
   the codebase. It is bounded by running the KDF at full cost, refusing a short
   passphrase, and saying so on the screen that writes the file.
+- **A conversation is streamed, and bounded on silence rather than on total
+  time.** Every other model call in the app is a queued job whose result lands
+  on a page that polls, so one timeout covering the whole request is the right
+  shape for it. Chat is the exception: somebody is sitting in front of it, and
+  a long answer from a large model is not a failing one. The old 120-second
+  ceiling cut those off mid-thought while the model was still working, and the
+  screen showed nothing at all until the request either finished or died. The
+  chat route streams instead, over three budgets that can tell the cases apart:
+  a generous wait for the first byte (a cold model is minutes of loading before
+  a token), a shorter one between tokens, and a total ceiling only so a stream
+  that drips forever cannot hold a connection open for a day. The cost is that
+  this screen, alone in the app, needs JavaScript.
+- **A conversation is named by the model, after its first answer.** The first
+  sixty characters of the question was a placeholder that read like one: every
+  thread in the sidebar began the same way, and the list was of openings rather
+  than of subjects. It costs a second request, so it is bounded to the case
+  that earns it — a new thread, an answer that finished, two dozen tokens with
+  reasoning off, on the destination that was already named and acknowledged for
+  that turn. It never introduces a second destination, it runs after the answer
+  is on screen and the composer is free, and every way it can fail leaves the
+  placeholder standing.
+- **The chat model is chosen on the chat screen.** It writes the same `chat`
+  role Settings does, rather than adding a per-conversation override, so there
+  is still one answer to which model chat uses and the badge on every other
+  screen stays true. The gate is unchanged: the destination is named before the
+  first token, and one that leaves this machine is refused server-side until it
+  has been acknowledged.
+
 - **A restore merges; it never replaces.** The two real restores are "into an
   empty journal" (where merge and replace are identical) and "I want March
   back" (where replacing destroys everything written since). The second has no
@@ -201,7 +229,9 @@ current one's tests pass.
       provider-native tool loop over dreams, nights, notes, signs, tags,
       reports, exact text search, activity and technique statistics. Tools are
       read-only, validated server-side, and their decrypted results are never
-      persisted.
+      persisted. The turn is streamed to the screen as it happens — working,
+      tools, then prose — over an SSE route rather than a Server Action, and
+      the model is picked in the conversation, which the model then names.
 
 ## Data model notes
 

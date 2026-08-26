@@ -37,6 +37,13 @@ function contentAad(id: string) {
   return { table: "chat_messages", column: "content_enc", id };
 }
 
+/**
+ * The title a thread is born with.
+ *
+ * A placeholder, and only that: the model names the conversation properly a
+ * moment after its first answer (`conversation-title.ts`). This is what stands
+ * if that call cannot be made, or comes back with something unusable.
+ */
 function titleFrom(message: string): string {
   const oneLine = message.trim().replace(/\s+/gu, " ");
   return oneLine.length <= 64 ? oneLine : `${oneLine.slice(0, 61).trimEnd()}…`;
@@ -175,6 +182,26 @@ export async function saveConversationExchange(
   });
 
   return resolvedThreadId;
+}
+
+/**
+ * Replaces a thread's title, leaving `updatedAt` alone.
+ *
+ * The title is written a moment after the exchange it describes, and bumping
+ * the timestamp again would reorder the list for a change nobody made.
+ */
+export async function renameConversation(
+  userId: string,
+  keys: UserKeys,
+  threadId: string,
+  title: string,
+): Promise<boolean> {
+  const renamed = await db
+    .update(chatThreads)
+    .set({ titleEnc: encrypt(keys.field, title, titleAad(threadId)) })
+    .where(and(eq(chatThreads.id, threadId), eq(chatThreads.userId, userId)))
+    .returning({ id: chatThreads.id });
+  return renamed.length > 0;
 }
 
 export async function deleteConversation(userId: string, threadId: string): Promise<boolean> {

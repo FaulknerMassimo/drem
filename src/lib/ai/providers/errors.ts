@@ -66,3 +66,17 @@ export function explainImageRejection(
     error.status,
   );
 }
+
+/**
+ * The reader stopped the answer.
+ *
+ * Not a failure, and deliberately not a `ProviderError`: nothing went wrong
+ * with the provider, and the partial answer is worth keeping. Callers catch
+ * this to save what was written rather than to report a problem.
+ */
+export class StreamStoppedError extends Error {
+  constructor() {
+    super("The answer was stopped");
+    this.name = "StreamStoppedError";
+  }
+}

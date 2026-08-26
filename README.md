@@ -46,8 +46,12 @@ to add in daylight.
   sign's lucid rate with the archive's baseline.
 - **Private journal chat.** Talk naturally with a configured model that can
   inspect dreams, nights, notes, signs, tags, saved reports, exact text matches,
-  activity, and technique statistics through validated read-only tools. Only
-  the final transcript is saved, encrypted; tool traces stay in memory.
+  activity, and technique statistics through validated read-only tools. The
+  answer streams as it is written — the model's working, each journal tool as
+  it runs, then the prose a token at a time — and can be stopped, keeping what
+  was written. The model is chosen on the chat screen itself, and it names each
+  conversation once its first answer is in. Only the final transcript is saved,
+  encrypted; tool traces stay in memory.
 - **Optional AI insights.** Assign local or remote providers separately to
   extraction, coaching, symbolic reading, reports, capture, and semantic roles.
   Every remote request names its destination before any dream leaves the

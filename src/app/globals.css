@@ -195,6 +195,23 @@ body {
     outline-offset: 1px;
   }
 
+  /*
+   * The caret at the end of an answer that is still arriving.
+   *
+   * A cursor is the difference between "the model is writing" and "the model
+   * has stopped mid-sentence", and on a local model at a few tokens a second
+   * there are long gaps between words where that question is a real one.
+   */
+  .chat-caret {
+    animation: chat-blink 1.1s steps(2, start) infinite;
+  }
+
+  @keyframes chat-blink {
+    to {
+      visibility: hidden;
+    }
+  }
+
   /* Capture mode: everything on this screen opts out of the normal palette. */
   .night-screen {
     background-color: #000;
