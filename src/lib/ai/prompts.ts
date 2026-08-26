@@ -15,7 +15,7 @@ export const PROMPT_VERSIONS: Record<Exclude<ChatRole, "chat">, string> = {
   symbolic: "symbolic.v1",
   report: "report.v1",
   ocr: "ocr.v5",
-  split: "split.v2",
+  split: "split.v3",
   signs: "signs.v1",
 };
 
@@ -212,9 +212,30 @@ export function ocrMessages() {
   };
 }
 
+/**
+ * The shape asked for, shown with *two* entries rather than one.
+ *
+ * A one-entry example is a worked example of returning one dream, and a model
+ * at temperature 0.1 with reasoning off follows the example over the prose.
+ * Measured against three photographed pages holding three plainly separate
+ * dreams -- a lighthouse, a grandmother's kitchen, a train platform, with no
+ * connective text between them -- qwen3.5:9b returned a single part every
+ * time, and did the same to a spoken memo whose seams were narrated out loud
+ * ("then I woke up for a bit and went back to sleep"). Showing two entries and
+ * changing nothing else split both correctly, on qwen3.5:9b, gemma4:12b and
+ * qwen3.8:27b alike.
+ *
+ * The prose was left alone on purpose. Strengthening it as well -- telling the
+ * model a night usually holds several dreams -- carved a *single* dream that
+ * wanders between settings into two, which is the worse failure: an
+ * over-split night has to be merged back by hand, and the writer has no
+ * button for that. The array was always any length; the example simply
+ * stopped arguing for one.
+ */
 const SPLIT_SCHEMA = `{
   "dreams": [
-    { "title": "short title or empty", "body": "the text of this one dream", "isFragment": false }
+    { "title": "short title or empty", "body": "the text of one dream, verbatim", "isFragment": false },
+    { "title": "short title or empty", "body": "the text of the next dream, verbatim", "isFragment": false }
   ]
 }`;
 

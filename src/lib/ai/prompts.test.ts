@@ -26,7 +26,7 @@ describe("insight prompts", () => {
     expect(PROMPT_VERSIONS.extraction).toBe("extraction.v1");
     expect(PROMPT_VERSIONS.lucidity).toBe("lucidity.v1");
     expect(PROMPT_VERSIONS.symbolic).toBe("symbolic.v1");
-    expect(PROMPT_VERSIONS.split).toBe("split.v2");
+    expect(PROMPT_VERSIONS.split).toBe("split.v3");
     // v5 copies one page at a time; v2–v4 asked a vision model to transcribe
     // and carve a whole stack in one call, which paraphrased the night.
     expect(PROMPT_VERSIONS.ocr).toBe("ocr.v5");
@@ -108,6 +108,17 @@ describe("insight prompts", () => {
     expect(prompt.user).toContain("I was flying");
     expect(prompt.system).not.toContain("I was flying");
     expect(prompt.system).toMatch(/Keep the writer's words/);
+  });
+
+  /*
+   * The regression that made a three-dream night arrive as one entry. The
+   * example carries more weight than the prose at this temperature, so a
+   * one-entry example is a worked example of never splitting.
+   */
+  it("shows the split schema with more than one dream in it", () => {
+    const prompt = splitMessages("I was flying. Then I was on a train.");
+    const example = prompt.user.slice(0, prompt.user.indexOf("Log:"));
+    expect(example.match(/"isFragment"/g)?.length).toBeGreaterThan(1);
   });
 
   it("tells a page-log split that a page break is not a new dream", () => {
