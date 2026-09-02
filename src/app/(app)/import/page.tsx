@@ -46,8 +46,8 @@ export default async function ImportPage() {
       <div>
         <h1 className="text-2xl font-semibold">Import</h1>
         <p className="mt-2 max-w-2xl text-sm text-ink-400">
-          Photograph a page, dictate a memo, or bring in a file. Nothing becomes
-          an entry until you confirm it.
+          Photograph a page and leave it here: transcription, splitting and
+          metadata happen in the background. Open an item only when it needs attention.
         </p>
       </div>
 
@@ -70,14 +70,14 @@ export default async function ImportPage() {
       {waiting.length > 0 && (
         <section className="space-y-3">
           <JobRefresh active={processing} />
-          <h2 className="text-lg font-medium">Waiting for review</h2>
+          <h2 className="text-lg font-medium">Processing or needs attention</h2>
           <ul className="space-y-2">
-            {waiting.map((stack) => (
-              <li key={stack.id}>
-                <a
-                  href={`/import/review/${stack.id}`}
-                  className="card flex items-center justify-between gap-3 hover:border-ink-600"
-                >
+            {waiting.map((stack) => {
+              const activePhoto =
+                stack.kind === "image" &&
+                (stack.status === "pending" || stack.status === "running");
+              const content = (
+                <>
                   <span className="text-sm text-ink-200">
                     {describe(stack.kind, stack.pages.length)}
                     <span
@@ -89,15 +89,35 @@ export default async function ImportPage() {
                       {failures.has(stack.id) && ` — ${failures.get(stack.id)}`}
                     </span>
                   </span>
-                  <span className="text-sm text-lucid-300">Review</span>
-                </a>
-              </li>
-            ))}
+                  <span className="text-sm text-lucid-300">
+                    {activePhoto ? "Filing automatically" : "Review"}
+                  </span>
+                </>
+              );
+              return (
+                <li key={stack.id}>
+                  {activePhoto ? (
+                    <div className="card flex items-center justify-between gap-3">{content}</div>
+                  ) : (
+                    <a
+                      href={`/import/review/${stack.id}`}
+                      className="card flex items-center justify-between gap-3 hover:border-ink-600"
+                    >
+                      {content}
+                    </a>
+                  )}
+                </li>
+              );
+            })}
           </ul>
         </section>
       )}
 
-      <PhotoImportForm csrfToken={csrfToken} />
+      <PhotoImportForm
+        csrfToken={csrfToken}
+        destination={destinations.ocr}
+        splitDestination={destinations.split}
+      />
       <VoiceRecorder csrfToken={csrfToken} />
       <FileImportForm csrfToken={csrfToken} />
       <p className="text-xs text-ink-400">Today is {nightDateFor()} on this machine.</p>

@@ -22,6 +22,7 @@ export interface CaptureFormState {
 export interface PhotoUploadResult {
   id?: string;
   duplicate?: boolean;
+  queued?: boolean;
   error?: string;
 }
 

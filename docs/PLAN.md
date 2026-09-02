@@ -61,6 +61,12 @@ Deviations from the original plan, all deliberate:
   writer does not tick-box join pages. `MAX_STACK_PAGES` is how many
   photographs one job will copy; a longer night is a second stack, not a
   second flow.
+- **A successful photograph files itself.** Each page gets a second,
+  image-grounded proofreading pass, then a text-only organiser proposes dream
+  boundaries and metadata. The application verifies that every transcript
+  token appears exactly once and slices the original copy itself, so the
+  organiser cannot paraphrase or invent dream text. Successful work creates
+  finished entries; only failed work stays in the import inbox for attention.
 - **Entries are indexed automatically only when the embedding model is local.**
   Search is useless if the index lags the journal, but embedding sends the entry
   somewhere, and the rule everywhere else is that nothing leaves the machine
@@ -226,9 +232,9 @@ current one's tests pass.
       (extraction → lucidity coach → symbolic reading → period reports), job
       queue, and a visible badge naming where a request is about to go before
       any dream leaves the machine.
-- [x] **4 — Capture.** Encrypted attachments, photo OCR with side-by-side review
-      (pages left, entries right, per-field confidence, nothing saved
-      unconfirmed), bulk multi-page import, voice memo → faster-whisper,
+- [x] **4 — Capture.** Encrypted attachments, automatically filed photo OCR
+      with side-by-side correction when a job fails, bulk multi-page import,
+      voice memo → faster-whisper,
       JSON/Markdown/CSV import, and AI splitting of a log that contains several
       dreams into separate entries.
 - [x] **5 — Semantic layer.** Embedding pipeline with backfill and staleness
@@ -284,8 +290,9 @@ honest comparison SQL can make.
   fail if a single word of dream content, the password, or `MASTER_KEY` appears
   anywhere in it.
 - Manual, per phase: setup → 2FA enrol → write entry → heatmap updates →
-  generate insight → photograph a real journal page → confirm the drafted entry
-  → semantic search finds it → scan a period and read the dream signs.
+  generate insight → photograph a real journal page → see its finished entries
+  appear automatically → semantic search finds them → scan a period and read
+  the dream signs.
 
 ## Out of scope
 

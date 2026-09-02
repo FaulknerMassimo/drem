@@ -148,6 +148,62 @@ describe("split parsing", () => {
       expect((error as Error).message).toBe("The model did not return JSON.");
     }
   });
+
+  it("uses the model only for boundaries and keeps the original transcript", () => {
+    const source = "I flew over Montréal.\nThen I woke.  Dream two: a train.";
+    const parts = parseSplitParts(
+      JSON.stringify({
+        dreams: [
+          { body: "I flew over Montréal. Then I woke.", title: "Flying" },
+          { body: "Dream two: a train.", title: "Train" },
+        ],
+      }),
+      source,
+    );
+    expect(parts[0]?.body).toBe("I flew over Montréal.\nThen I woke.");
+    expect(parts[1]?.body).toBe("Dream two: a train.");
+    expect(parts.map((part) => part.body).join(" ").replace(/\s+/g, " ")).toBe(
+      source.replace(/\s+/g, " "),
+    );
+  });
+
+  it("refuses a split that rewrites or invents transcript text", () => {
+    expect(() =>
+      parseSplitParts(
+        JSON.stringify({ dreams: [{ body: "I flew above the cathedral." }] }),
+        "I flew over the cathedral.",
+      ),
+    ).toThrow(/changed the transcript/);
+  });
+
+  it("reads the finished-entry metadata from the organiser", () => {
+    const [part] = parseSplitParts(
+      JSON.stringify({
+        dreams: [{
+          body: "I knew I was dreaming and flew away.",
+          title: "Lucid flight",
+          tags: ["flying", "lucid"],
+          lucidity: 4,
+          vividness: 5,
+          control: 4,
+          recallClarity: 5,
+          emotionalValence: 2,
+          isNightmare: false,
+          isRecurring: true,
+        }],
+      }),
+    );
+    expect(part).toMatchObject({
+      tags: ["flying", "lucid"],
+      lucidity: 4,
+      vividness: 5,
+      control: 4,
+      recallClarity: 5,
+      emotionalValence: 2,
+      isNightmare: false,
+      isRecurring: true,
+    });
+  });
 });
 
 describe("fields as a vision model actually writes them", () => {

@@ -248,7 +248,7 @@ describe("the OCR worker", () => {
     lendKeysToWorker();
   }
 
-  it("decrypts the page, calls the adapter, and stores an encrypted reading", async () => {
+  it("uses the page-reading model to organise and file a photo automatically", async () => {
     const prepared = await prepareImage(await tinyJpeg());
     const { id } = await createImageAttachment(userId, keys, prepared, null);
     await assignVisionModel();
@@ -257,7 +257,26 @@ describe("the OCR worker", () => {
       expect(String(url)).toContain("/api/chat");
       const body = JSON.parse(String(init?.body));
       const user = body.messages.find((message: { role: string }) => message.role === "user");
-      expect(user.images?.length).toBe(1);
+      if (!user.images?.length) {
+        return new Response(
+          JSON.stringify({
+            message: {
+              content: JSON.stringify({
+                dreams: [{
+                  title: "The cathedral",
+                  body: `I dreamt of ${CANARY}`,
+                  tags: ["flying"],
+                  lucidity: 0,
+                  vividness: 4,
+                  recallClarity: 5,
+                }],
+              }),
+            },
+          }),
+          { headers: { "content-type": "application/json" } },
+        );
+      }
+      expect(user.images.length).toBe(1);
       return new Response(
         JSON.stringify({
           message: {
@@ -283,9 +302,14 @@ describe("the OCR worker", () => {
     expect(stored?.status).toBe("succeeded");
     expect(stored?.dreams[0]?.body.value).toContain(CANARY);
     expect(stored?.dreams[0]?.body.confidence).toBeCloseTo(0.77);
+    expect(fetchImpl).toHaveBeenCalledTimes(3);
 
     const [row] = await db.select().from(attachments).where(eq(attachments.id, id));
+    expect(row?.dreamId).not.toBeNull();
     expect(Buffer.from(row!.transcriptEnc!).toString("utf8")).not.toContain(CANARY);
+
+    const [dream] = await db.select().from(dreams).where(eq(dreams.userId, userId));
+    expect(dream).toMatchObject({ vividness: 4, recallClarity: 5, source: "ocr", isDraft: false });
 
     const [job] = await db.select().from(jobs);
     expect(job?.status).toBe("succeeded");
@@ -339,19 +363,22 @@ describe("the OCR worker", () => {
       const images = user.images?.length ?? 0;
       imageCounts.push(images);
       if (images > 0) {
-        expect(user.content).toMatch(/Transcribe the attached page/);
-        const text = pageBodies[ocrCalls] ?? "";
+        expect(user.content).toMatch(/Transcribe the attached page|Draft transcript to verify/);
+        const pageIndex = Math.floor(ocrCalls / 2);
+        const text = pageBodies[pageIndex] ?? "";
         ocrCalls += 1;
         return new Response(
           JSON.stringify({
             message: {
               content: JSON.stringify({
-                date: ocrCalls === 1 ? "2026-08-17" : "",
+                date: pageIndex === 0 ? "2026-08-17" : "",
                 title: "",
                 body: text,
                 bodyConfidence: 0.8,
                 tags: [],
                 lucidity: null,
+                bedTime: pageIndex === 0 ? "23:15" : "",
+                wakeTime: pageIndex === 0 ? "07:05" : "",
               }),
             },
           }),
@@ -371,6 +398,12 @@ describe("the OCR worker", () => {
                 {
                   title: "The cathedral",
                   body: `I dreamt of ${CANARY}, and it went on across the next page`,
+                  tags: ["flying", "cathedral"],
+                  lucidity: 3,
+                  vividness: 5,
+                  control: 4,
+                  recallClarity: 5,
+                  emotionalValence: 2,
                   isFragment: false,
                 },
                 { title: "", body: "Then a train.", isFragment: true },
@@ -387,28 +420,32 @@ describe("the OCR worker", () => {
     expect(await processNextJob()).toBe("done");
 
     // One copy per page, then one split of the joined log.
-    expect(imageCounts).toEqual([1, 1, 1, 0]);
+    expect(imageCounts).toEqual([1, 1, 1, 1, 1, 1, 0]);
 
-    const stack = await getStack(userId, keys, stackId);
-    expect(stack?.leadId).toBe(ids[0]);
-    expect(stack?.pages.map((page) => page.id)).toEqual(ids);
-    expect(stack?.dreams).toHaveLength(2);
-    expect(stack?.dreams[0]?.pages).toEqual([1, 2]);
-    expect(stack?.dreams[1]?.pages).toEqual([3]);
-    expect(stack?.dreams[1]?.isFragment).toBe(true);
-
-    // Every page moved with the lead, so the inbox shows one thing to review.
+    // Successful work leaves no review task behind.
+    expect(await getStack(userId, keys, stackId)).toBeNull();
     const stacks = await listStacks(userId, keys);
-    expect(stacks).toHaveLength(1);
-    expect(stacks[0]?.status).toBe("succeeded");
+    expect(stacks).toHaveLength(0);
 
     const rows = await db.select().from(attachments).where(eq(attachments.userId, userId));
     expect(rows.every((row) => row.status === "succeeded")).toBe(true);
+    expect(rows.every((row) => row.dreamId !== null)).toBe(true);
+    expect(new Set(rows.map((row) => row.dreamId)).size).toBe(2);
     for (const row of rows) {
       if (row.transcriptEnc) {
         expect(Buffer.from(row.transcriptEnc).toString("utf8")).not.toContain(CANARY);
       }
     }
+    const dreamRows = await db.select().from(dreams).where(eq(dreams.userId, userId));
+    expect(dreamRows).toHaveLength(2);
+    expect(dreamRows.find((row) => row.lucidity === 3)).toMatchObject({
+      vividness: 5,
+      control: 4,
+      recallClarity: 5,
+      emotionalValence: 2,
+    });
+    const [night] = await db.select().from(nights).where(eq(nights.userId, userId));
+    expect(night).toMatchObject({ bedTime: "23:15:00", wakeTime: "07:05:00" });
   });
 
   it("files each photograph with the dream it was read off", async () => {

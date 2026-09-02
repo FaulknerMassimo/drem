@@ -14,8 +14,8 @@ export const PROMPT_VERSIONS: Record<Exclude<ChatRole, "chat">, string> = {
   lucidity: "lucidity.v1",
   symbolic: "symbolic.v1",
   report: "report.v1",
-  ocr: "ocr.v5",
-  split: "split.v3",
+  ocr: "ocr.v7",
+  split: "split.v4",
   signs: "signs.v1",
 };
 
@@ -146,7 +146,11 @@ const OCR_SCHEMA = `{
   "tags": ["short labels only if clearly written as tags"],
   "tagsConfidence": 0.0,
   "lucidity": null,
-  "lucidityConfidence": 0.0
+  "lucidityConfidence": 0.0,
+  "bedTime": "HH:MM or empty if none is written",
+  "bedTimeConfidence": 0.0,
+  "wakeTime": "HH:MM or empty if none is written",
+  "wakeTimeConfidence": 0.0
 }`;
 
 /**
@@ -177,6 +181,10 @@ export const OCR_RESPONSE_SCHEMA: Record<string, unknown> = {
     // A page that states no rating must be able to say so; 0 is a rating.
     lucidity: { anyOf: [{ type: "integer", minimum: 0, maximum: 5 }, { type: "null" }] },
     lucidityConfidence: CONFIDENCE_SCHEMA,
+    bedTime: { type: "string" },
+    bedTimeConfidence: CONFIDENCE_SCHEMA,
+    wakeTime: { type: "string" },
+    wakeTimeConfidence: CONFIDENCE_SCHEMA,
   },
   required: [
     "date",
@@ -189,6 +197,10 @@ export const OCR_RESPONSE_SCHEMA: Record<string, unknown> = {
     "tagsConfidence",
     "lucidity",
     "lucidityConfidence",
+    "bedTime",
+    "bedTimeConfidence",
+    "wakeTime",
+    "wakeTimeConfidence",
   ],
 };
 
@@ -209,6 +221,30 @@ export function ocrMessages() {
     system:
       "You transcribe a photographed handwritten dream-journal page. Be literal. Do not interpret, complete, or tidy the writing into something the page does not say. If a word is unreadable, use [illegible]. Reply with a JSON object matching the schema and nothing else. Confidence is 0–1 for each field.",
     user: `Schema:\n${OCR_SCHEMA}\n\nTranscribe the attached page.`,
+  };
+}
+
+/**
+ * A second look at the same page, still strictly a copying task.
+ *
+ * The first transcript gives the model something concrete to check letter by
+ * letter. This pass may correct a misread word from the photograph, but it is
+ * explicitly kept away from splitting and metadata inference so a request for
+ * accuracy cannot turn into the old paraphrasing failure.
+ */
+export function ocrVerificationMessages(draft: {
+  date: string | null;
+  title: string | null;
+  body: string;
+  tags: string[];
+  lucidity: number | null;
+  bedTime: string | null;
+  wakeTime: string | null;
+}) {
+  return {
+    system:
+      "You proofread a literal transcript against the attached handwritten page. Compare it word by word with the image. Correct only definite transcription mistakes, restore omitted writing, and keep [illegible] where the image does not support a word. Do not split dreams, rewrite prose, interpret, complete, or tidy it. Reply with a JSON object matching the schema and nothing else. Confidence is 0–1 for each field.",
+    user: `Schema:\n${OCR_SCHEMA}\n\nDraft transcript to verify against the attached page:\n${JSON.stringify(draft)}`,
   };
 }
 
@@ -234,8 +270,32 @@ export function ocrMessages() {
  */
 const SPLIT_SCHEMA = `{
   "dreams": [
-    { "title": "short title or empty", "body": "the text of one dream, verbatim", "isFragment": false },
-    { "title": "short title or empty", "body": "the text of the next dream, verbatim", "isFragment": false }
+    {
+      "title": "short descriptive title",
+      "body": "the exact text of one dream, copied verbatim",
+      "tags": ["2-5 concise subjects, places, people or anomalies"],
+      "lucidity": 0,
+      "vividness": 3,
+      "control": null,
+      "recallClarity": 3,
+      "emotionalValence": 0,
+      "isNightmare": false,
+      "isRecurring": false,
+      "isFragment": false
+    },
+    {
+      "title": "short descriptive title",
+      "body": "the exact text of the next dream, copied verbatim",
+      "tags": ["..."],
+      "lucidity": 0,
+      "vividness": 3,
+      "control": null,
+      "recallClarity": 3,
+      "emotionalValence": 0,
+      "isNightmare": false,
+      "isRecurring": false,
+      "isFragment": false
+    }
   ]
 }`;
 
@@ -254,8 +314,12 @@ export function splitMessages(body: string, source: "log" | "pages" = "log") {
       : "";
   return {
     system:
-      `You split a dream-journal log into individual dream episodes. Keep the writer's words. Do not interpret, summarise, or add detail. A new dream usually starts at a scene change, a waking, or an explicit marker like 'Dream 2'.${pageBreak} If the log is one continuous dream, return a single item. Reply with a JSON object matching the schema and nothing else.`,
-    user: `Schema:\n${SPLIT_SCHEMA}\n\nLog:\n${clip(body)}`,
+      `You organise a transcribed dream-journal log into finished entries. A new dream usually starts at a scene change, a waking, or an explicit marker like 'Dream 2'.${pageBreak} If the log is one continuous dream, return one item. Copy every character of the log into the body fields, in order, exactly once: never rewrite, correct, summarise, omit, or add text. Give each entry a useful short title and 2-5 concise tags. Lucidity is 1-5 only when the writer knew they were dreaming; otherwise it is 0. Rate vividness and recall clarity 1-5 from the account, and use null when there is not enough evidence. Control is null unless the dreamer deliberately influenced the dream. Emotional valence is -2 to 2. Mark nightmare or recurring only when the account supports it. Reply with a JSON object matching the schema and nothing else.`,
+    // A photographed stack must either organise every copied word or fail
+    // visibly. Clipping it would make the verbatim guard reject every long
+    // night after the model had been denied the missing tail. Typed-entry
+    // splitting keeps its existing prompt cap.
+    user: `Schema:\n${SPLIT_SCHEMA}\n\nLog:\n${source === "pages" ? body : clip(body)}`,
   };
 }
 

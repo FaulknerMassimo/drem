@@ -35,9 +35,11 @@ to add in daylight.
 - **Fast and offline capture.** Install drem as a PWA, open Capture from a home
   screen shortcut, and keep unsent captures queued visibly on the device until
   the server confirms each save.
-- **Paper, audio, and file import.** Transcribe photographed pages one at a
-  time, split a joined night into separate dreams, review everything before it
-  is filed, transcribe voice memos locally, or import JSON, Markdown, and CSV.
+- **Paper, audio, and file import.** A photograph is proofread against the
+  image, split from verified text, enriched with ratings and tags, and filed in
+  the background. Multi-page nights are still copied one page at a time before
+  they are joined. Failed readings remain available to fix; voice memos and
+  JSON, Markdown, and CSV imports keep their review flows.
 - **Recall and lucidity trends.** Follow a year-long activity heatmap, recall
   and lucid streaks, technique effectiveness, monthly rates, and changes in
   vividness, control, and clarity.

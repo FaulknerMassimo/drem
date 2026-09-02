@@ -60,6 +60,22 @@ const dreamSchema = z
     tagsConfidence: confidence.optional(),
     lucidity: z.unknown().optional(),
     lucidityConfidence: confidence.optional(),
+    vividness: z.unknown().optional(),
+    vividnessConfidence: confidence.optional(),
+    control: z.unknown().optional(),
+    controlConfidence: confidence.optional(),
+    recallClarity: z.unknown().optional(),
+    recallClarityConfidence: confidence.optional(),
+    emotionalValence: z.unknown().optional(),
+    emotionalValenceConfidence: confidence.optional(),
+    isNightmare: z.unknown().optional(),
+    isNightmareConfidence: confidence.optional(),
+    isRecurring: z.unknown().optional(),
+    isRecurringConfidence: confidence.optional(),
+    bedTime: z.unknown().optional(),
+    bedTimeConfidence: confidence.optional(),
+    wakeTime: z.unknown().optional(),
+    wakeTimeConfidence: confidence.optional(),
     text: z.unknown().optional(),
   })
   .passthrough();
@@ -112,6 +128,14 @@ export function emptyFields(): ExtractedFields {
     body: { value: "", confidence: null },
     tags: { value: [], confidence: null },
     lucidity: { value: null, confidence: null },
+    vividness: { value: null, confidence: null },
+    control: { value: null, confidence: null },
+    recallClarity: { value: null, confidence: null },
+    emotionalValence: { value: null, confidence: null },
+    isNightmare: { value: null, confidence: null },
+    isRecurring: { value: null, confidence: null },
+    bedTime: { value: null, confidence: null },
+    wakeTime: { value: null, confidence: null },
     raw: "",
   };
 }
@@ -137,6 +161,14 @@ const TRANSCRIPT_KEYS = [
   "bodyConfidence",
   "tagsConfidence",
   "lucidityConfidence",
+  "vividness",
+  "control",
+  "recallClarity",
+  "emotionalValence",
+  "isNightmare",
+  "isRecurring",
+  "bedTime",
+  "wakeTime",
 ];
 
 function hasTranscriptKey(value: unknown): boolean {
@@ -175,6 +207,10 @@ function readDreamFrom(reply: unknown, pageCount: number): ReadDream {
 
   const tags = stringList(nestedValue(record, "tags"));
   const lucidity = intOrNull(nestedValue(record, "lucidity"), 0, 5);
+  const vividness = intOrNull(nestedValue(record, "vividness"), 1, 5);
+  const control = intOrNull(nestedValue(record, "control"), 1, 5);
+  const recallClarity = intOrNull(nestedValue(record, "recallClarity"), 1, 5);
+  const emotionalValence = intOrNull(nestedValue(record, "emotionalValence"), -2, 2);
   const clipped = clip(body, MAX_BODY_LENGTH);
 
   return {
@@ -194,6 +230,38 @@ function readDreamFrom(reply: unknown, pageCount: number): ReadDream {
     lucidity: {
       value: lucidity,
       confidence: nestedConfidence(record, "lucidity", "lucidityConfidence"),
+    },
+    vividness: {
+      value: vividness,
+      confidence: nestedConfidence(record, "vividness", "vividnessConfidence"),
+    },
+    control: {
+      value: control,
+      confidence: nestedConfidence(record, "control", "controlConfidence"),
+    },
+    recallClarity: {
+      value: recallClarity,
+      confidence: nestedConfidence(record, "recallClarity", "recallClarityConfidence"),
+    },
+    emotionalValence: {
+      value: emotionalValence,
+      confidence: nestedConfidence(record, "emotionalValence", "emotionalValenceConfidence"),
+    },
+    isNightmare: {
+      value: booleanOrNull(nestedValue(record, "isNightmare")),
+      confidence: nestedConfidence(record, "isNightmare", "isNightmareConfidence"),
+    },
+    isRecurring: {
+      value: booleanOrNull(nestedValue(record, "isRecurring")),
+      confidence: nestedConfidence(record, "isRecurring", "isRecurringConfidence"),
+    },
+    bedTime: {
+      value: clockTimeOrNull(nestedValue(record, "bedTime")),
+      confidence: nestedConfidence(record, "bedTime", "bedTimeConfidence"),
+    },
+    wakeTime: {
+      value: clockTimeOrNull(nestedValue(record, "wakeTime")),
+      confidence: nestedConfidence(record, "wakeTime", "wakeTimeConfidence"),
     },
     raw: clipped,
     isFragment: Boolean(record.isFragment ?? record.is_fragment),
@@ -394,7 +462,7 @@ export function readingFromPages(pages: ReadDream[], parts: SplitPart[]): ReadDr
     const fromPages = pageNums
       .map((number) => pages[number - 1])
       .filter((page): page is ReadDream => Boolean(page));
-    const tags = uniqueTags(fromPages.flatMap((page) => page.tags.value));
+    const tags = uniqueTags([...(part.tags ?? []), ...fromPages.flatMap((page) => page.tags.value)]);
     const lucidity =
       fromPages.find((page) => page.lucidity.value !== null)?.lucidity ??
       { value: null, confidence: null };
@@ -413,12 +481,40 @@ export function readingFromPages(pages: ReadDream[], parts: SplitPart[]): ReadDr
         confidence: confidences.length > 0 ? Math.min(...confidences) : null,
       },
       tags: { value: tags, confidence: null },
-      lucidity,
+      lucidity:
+        part.lucidity === undefined || part.lucidity === null
+          ? lucidity
+          : { value: part.lucidity, confidence: null },
+      vividness: inferredField(part.vividness, fromPages, "vividness"),
+      control: inferredField(part.control, fromPages, "control"),
+      recallClarity: inferredField(part.recallClarity, fromPages, "recallClarity"),
+      emotionalValence: inferredField(part.emotionalValence, fromPages, "emotionalValence"),
+      isNightmare: inferredField(part.isNightmare, fromPages, "isNightmare"),
+      isRecurring: inferredField(part.isRecurring, fromPages, "isRecurring"),
+      bedTime: pages.find((page) => page.bedTime.value !== null)?.bedTime ?? sourceField("bedTime"),
+      wakeTime: pages.find((page) => page.wakeTime.value !== null)?.wakeTime ?? sourceField("wakeTime"),
       raw: body,
       isFragment: part.isFragment,
       pages: pageNums,
     };
   });
+
+  function sourceField<K extends "bedTime" | "wakeTime">(key: K): ReadDream[K] {
+    return pages[0]?.[key] ?? emptyDream()[key];
+  }
+}
+
+function inferredField<
+  K extends
+    | "vividness"
+    | "control"
+    | "recallClarity"
+    | "emotionalValence"
+    | "isNightmare"
+    | "isRecurring",
+>(value: ReadDream[K]["value"] | undefined, pages: ReadDream[], key: K): ReadDream[K] {
+  if (value !== undefined && value !== null) return { value, confidence: null } as ReadDream[K];
+  return (pages.find((page) => page[key].value !== null)?.[key] ?? emptyDream()[key]) as ReadDream[K];
 }
 
 /**
@@ -451,6 +547,19 @@ export function mergePageTranscripts(pages: ReadDream[]): ReadDream {
     },
     tags: { value: tags, confidence: null },
     lucidity,
+    vividness: pages.find((page) => page.vividness.value !== null)?.vividness ?? source.vividness,
+    control: pages.find((page) => page.control.value !== null)?.control ?? source.control,
+    recallClarity:
+      pages.find((page) => page.recallClarity.value !== null)?.recallClarity ?? source.recallClarity,
+    emotionalValence:
+      pages.find((page) => page.emotionalValence.value !== null)?.emotionalValence ??
+      source.emotionalValence,
+    isNightmare:
+      pages.find((page) => page.isNightmare.value !== null)?.isNightmare ?? source.isNightmare,
+    isRecurring:
+      pages.find((page) => page.isRecurring.value !== null)?.isRecurring ?? source.isRecurring,
+    bedTime: pages.find((page) => page.bedTime.value !== null)?.bedTime ?? source.bedTime,
+    wakeTime: pages.find((page) => page.wakeTime.value !== null)?.wakeTime ?? source.wakeTime,
     raw: body,
     isFragment: false,
     pages: withText.map(({ number }) => number),
@@ -527,6 +636,14 @@ function storedDream(parsed: Record<string, unknown>): ReadDream {
     body,
     tags: fields.tags ?? base.tags,
     lucidity: fields.lucidity ?? base.lucidity,
+    vividness: fields.vividness ?? base.vividness,
+    control: fields.control ?? base.control,
+    recallClarity: fields.recallClarity ?? base.recallClarity,
+    emotionalValence: fields.emotionalValence ?? base.emotionalValence,
+    isNightmare: fields.isNightmare ?? base.isNightmare,
+    isRecurring: fields.isRecurring ?? base.isRecurring,
+    bedTime: fields.bedTime ?? base.bedTime,
+    wakeTime: fields.wakeTime ?? base.wakeTime,
     raw: typeof fields.raw === "string" ? fields.raw : body.value,
     isFragment: Boolean(fields.isFragment),
     pages: Array.isArray(fields.pages) ? fields.pages : [],
@@ -556,13 +673,21 @@ const splitPartSchema = z.object({
   body: z.string(),
   isFragment: z.boolean().optional(),
   is_fragment: z.boolean().optional(),
+  tags: z.unknown().optional(),
+  lucidity: z.unknown().optional(),
+  vividness: z.unknown().optional(),
+  control: z.unknown().optional(),
+  recallClarity: z.unknown().optional(),
+  emotionalValence: z.unknown().optional(),
+  isNightmare: z.boolean().optional(),
+  isRecurring: z.boolean().optional(),
 });
 
 const splitSchema = z.object({
   dreams: z.array(splitPartSchema).min(1).max(20),
 });
 
-export function parseSplitParts(text: string): SplitPart[] {
+export function parseSplitParts(text: string, source?: string): SplitPart[] {
   const parsed = splitSchema.parse(parseJsonObject(text));
   const parts: SplitPart[] = [];
   for (const part of parsed.dreams) {
@@ -573,10 +698,48 @@ export function parseSplitParts(text: string): SplitPart[] {
       title,
       body,
       isFragment: Boolean(part.isFragment ?? part.is_fragment),
+      tags: stringList(part.tags),
+      lucidity: intOrNull(part.lucidity, 0, 5),
+      vividness: intOrNull(part.vividness, 1, 5),
+      control: intOrNull(part.control, 1, 5),
+      recallClarity: intOrNull(part.recallClarity, 1, 5),
+      emotionalValence: intOrNull(part.emotionalValence, -2, 2),
+      isNightmare: Boolean(part.isNightmare),
+      isRecurring: Boolean(part.isRecurring),
     });
   }
   if (parts.length === 0) throw new Error("The model did not return JSON.");
-  return parts;
+  return source === undefined ? parts : verbatimParts(source, parts);
+}
+
+/**
+ * Keeps the organiser in charge of boundaries and the application in charge
+ * of words. A response that rewrites, drops or invents even one token is
+ * rejected; successful parts are sliced back out of the original transcript.
+ */
+function verbatimParts(source: string, parts: SplitPart[]): SplitPart[] {
+  const sourceWords = [...source.matchAll(/\S+/gu)];
+  const proposedWords = parts.flatMap((part) => [...part.body.matchAll(/\S+/gu)]);
+  if (
+    sourceWords.length !== proposedWords.length ||
+    sourceWords.some(
+      (word, index) => word[0].toLowerCase() !== proposedWords[index]?.[0].toLowerCase(),
+    )
+  ) {
+    throw new Error("The split changed the transcript instead of only dividing it.");
+  }
+
+  let wordOffset = 0;
+  return parts.map((part, index) => {
+    const wordCount = [...part.body.matchAll(/\S+/gu)].length;
+    const start = sourceWords[wordOffset]?.index ?? 0;
+    wordOffset += wordCount;
+    const end =
+      index + 1 < parts.length
+        ? (sourceWords[wordOffset]?.index ?? source.length)
+        : source.length;
+    return { ...part, body: clip(source.slice(start, end), MAX_BODY_LENGTH) };
+  });
 }
 
 function stringOrNull(value: unknown): string | null {
@@ -609,6 +772,16 @@ function numberInText(text: string, min: number, max: number): number | null {
     .map((match) => Number(match[0]))
     .filter((value) => Number.isFinite(value) && value >= min && value <= max);
   return inRange.length === 1 ? inRange[0]! : null;
+}
+
+function booleanOrNull(value: unknown): boolean | null {
+  return typeof value === "boolean" ? value : null;
+}
+
+function clockTimeOrNull(value: unknown): string | null {
+  if (typeof value !== "string") return null;
+  const match = value.trim().match(/^(?:[01]\d|2[0-3]):[0-5]\d/);
+  return match?.[0] ?? null;
 }
 
 /**

@@ -16,6 +16,14 @@ export interface ExtractedFields {
   body: FieldConfidence<string>;
   tags: FieldConfidence<string[]>;
   lucidity: FieldConfidence<number | null>;
+  vividness: FieldConfidence<number | null>;
+  control: FieldConfidence<number | null>;
+  recallClarity: FieldConfidence<number | null>;
+  emotionalValence: FieldConfidence<number | null>;
+  isNightmare: FieldConfidence<boolean | null>;
+  isRecurring: FieldConfidence<boolean | null>;
+  bedTime: FieldConfidence<string | null>;
+  wakeTime: FieldConfidence<string | null>;
   raw: string;
 }
 
@@ -23,6 +31,14 @@ export interface SplitPart {
   title: string | null;
   body: string;
   isFragment: boolean;
+  tags?: string[];
+  lucidity?: number | null;
+  vividness?: number | null;
+  control?: number | null;
+  recallClarity?: number | null;
+  emotionalValence?: number | null;
+  isNightmare?: boolean;
+  isRecurring?: boolean;
 }
 
 /**

@@ -158,6 +158,40 @@ export async function saveNight(
   });
 }
 
+/**
+ * Adds facts read from a photographed page without overwriting anything the
+ * writer already recorded for that night. The automatic importer only knows
+ * the two clock fields it can see on paper; it must not turn that partial view
+ * into nulls for notes, techniques, WBTB or sleep quality.
+ */
+export async function fillMissingNightTimes(
+  userId: string,
+  date: IsoDate,
+  input: { bedTime: string | null; wakeTime: string | null },
+): Promise<void> {
+  if (!input.bedTime && !input.wakeTime) return;
+  await db.transaction(async (tx) => {
+    const id = await ensureNight(tx, userId, date);
+    const [existing] = await tx
+      .select({ bedTime: nights.bedTime, wakeTime: nights.wakeTime })
+      .from(nights)
+      .where(and(eq(nights.id, id), eq(nights.userId, userId)))
+      .limit(1);
+    if (!existing) return;
+
+    const patch: { bedTime?: string; wakeTime?: string; updatedAt: Date } = {
+      updatedAt: new Date(),
+    };
+    if (!existing.bedTime && input.bedTime) patch.bedTime = input.bedTime;
+    if (!existing.wakeTime && input.wakeTime) patch.wakeTime = input.wakeTime;
+    if (!patch.bedTime && !patch.wakeTime) return;
+    await tx
+      .update(nights)
+      .set(patch)
+      .where(and(eq(nights.id, id), eq(nights.userId, userId)));
+  });
+}
+
 /** Clears the "no recall" flag once a dream is attached to the night. */
 export async function clearNoRecall(
   exec: Executor,

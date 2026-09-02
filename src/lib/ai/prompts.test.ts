@@ -5,6 +5,7 @@ import {
   OCR_RESPONSE_SCHEMA,
   lucidityMessages,
   ocrMessages,
+  ocrVerificationMessages,
   PROMPT_VERSIONS,
   reportMessages,
   splitMessages,
@@ -26,10 +27,10 @@ describe("insight prompts", () => {
     expect(PROMPT_VERSIONS.extraction).toBe("extraction.v1");
     expect(PROMPT_VERSIONS.lucidity).toBe("lucidity.v1");
     expect(PROMPT_VERSIONS.symbolic).toBe("symbolic.v1");
-    expect(PROMPT_VERSIONS.split).toBe("split.v3");
-    // v5 copies one page at a time; v2–v4 asked a vision model to transcribe
-    // and carve a whole stack in one call, which paraphrased the night.
-    expect(PROMPT_VERSIONS.ocr).toBe("ocr.v5");
+    expect(PROMPT_VERSIONS.split).toBe("split.v4");
+    // v7 adds a second image-grounded proofreading pass while retaining v5's
+    // one-page copy boundary.
+    expect(PROMPT_VERSIONS.ocr).toBe("ocr.v7");
   });
 
   it("puts the dream in the user message, not the system prompt", () => {
@@ -78,6 +79,21 @@ describe("insight prompts", () => {
     expect(prompt.system).toMatch(/Be literal/);
   });
 
+  it("keeps proofreading image-grounded and separate from splitting", () => {
+    const prompt = ocrVerificationMessages({
+      date: "2026-08-17",
+      title: "The cathedral",
+      body: "I was flying.",
+      tags: [],
+      lucidity: null,
+      bedTime: null,
+      wakeTime: null,
+    });
+    expect(prompt.user).toContain("I was flying");
+    expect(prompt.system).toMatch(/attached handwritten page/);
+    expect(prompt.system).toMatch(/Do not split dreams/);
+  });
+
   /*
    * The grammar, not the prose, is what a model that answers its own way is
    * caught by -- a well-formed object with none of these keys in it used to
@@ -95,6 +111,10 @@ describe("insight prompts", () => {
       "tagsConfidence",
       "lucidity",
       "lucidityConfidence",
+      "bedTime",
+      "bedTimeConfidence",
+      "wakeTime",
+      "wakeTimeConfidence",
     ]);
   });
 
@@ -107,7 +127,7 @@ describe("insight prompts", () => {
     const prompt = splitMessages("I was flying. Then I woke and was in a train.");
     expect(prompt.user).toContain("I was flying");
     expect(prompt.system).not.toContain("I was flying");
-    expect(prompt.system).toMatch(/Keep the writer's words/);
+    expect(prompt.system).toMatch(/Copy every character/);
   });
 
   /*
@@ -125,5 +145,12 @@ describe("insight prompts", () => {
     const fromPages = splitMessages("I was flying.", "pages");
     expect(fromPages.system).toMatch(/page break is not a new dream/i);
     expect(splitMessages("I was flying.").system).not.toMatch(/page break/);
+  });
+
+  it("does not clip a photographed night before the verbatim split", () => {
+    const tail = "last-written-word";
+    const body = `${"a".repeat(9_000)} ${tail}`;
+    expect(splitMessages(body, "pages").user).toContain(tail);
+    expect(splitMessages(body).user).not.toContain(tail);
   });
 });

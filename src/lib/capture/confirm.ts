@@ -19,6 +19,12 @@ export interface ConfirmFields {
   title: string | null;
   body: string;
   lucidity: number;
+  vividness?: number | null;
+  control?: number | null;
+  recallClarity?: number | null;
+  emotionalValence?: number | null;
+  isNightmare?: boolean;
+  isRecurring?: boolean;
   tags: string[];
   isFragment: boolean;
   /**
@@ -37,12 +43,12 @@ function asInput(fields: ConfirmFields, isDraft: boolean): DreamInput {
     title: fields.title,
     body: fields.body,
     lucidity: fields.lucidity,
-    vividness: null,
-    control: null,
-    recallClarity: null,
-    emotionalValence: null,
-    isNightmare: false,
-    isRecurring: false,
+    vividness: fields.vividness ?? null,
+    control: fields.control ?? null,
+    recallClarity: fields.recallClarity ?? null,
+    emotionalValence: fields.emotionalValence ?? null,
+    isNightmare: fields.isNightmare ?? false,
+    isRecurring: fields.isRecurring ?? false,
     isFragment: fields.isFragment,
     isDraft,
     tags: fields.tags,
@@ -100,6 +106,12 @@ export function importedToFields(entry: ImportedDream): ConfirmFields {
     title: entry.title,
     body: entry.body,
     lucidity: entry.lucidity,
+    vividness: entry.vividness,
+    control: entry.control,
+    recallClarity: entry.recallClarity,
+    emotionalValence: entry.emotionalValence,
+    isNightmare: entry.isNightmare,
+    isRecurring: entry.isRecurring,
     tags: entry.tags,
     isFragment: entry.isFragment,
   };
@@ -111,7 +123,13 @@ export function splitToFields(part: SplitPart, nightDate: IsoDate, lucidity: num
     title: part.title,
     body: part.body,
     lucidity,
-    tags: [],
+    vividness: part.vividness,
+    control: part.control,
+    recallClarity: part.recallClarity,
+    emotionalValence: part.emotionalValence,
+    isNightmare: part.isNightmare,
+    isRecurring: part.isRecurring,
+    tags: part.tags ?? [],
     isFragment: part.isFragment,
   };
 }

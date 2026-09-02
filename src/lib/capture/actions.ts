@@ -70,7 +70,7 @@ function resolveNightDate(submitted: string): IsoDate {
 // Uploads
 // ---------------------------------------------------------------------------
 
-/** Stores one prepared photograph as a page of a stack. Reading is asked for later. */
+/** Stores one prepared photograph as an encrypted page. */
 async function storePhoto(
   session: ActiveSession,
   stackId: string | null,
@@ -105,6 +105,8 @@ export async function uploadPhotosAction(
   if (files.length > MAX_UPLOAD_BATCH) {
     return { error: `Upload at most ${MAX_UPLOAD_BATCH} pages at a time.` };
   }
+  const gated = await gateCapturePipeline(session, formData);
+  if (gated) return gated;
 
   /*
    * The no-JavaScript path, and the only one that knows the whole stack up
@@ -112,17 +114,23 @@ export async function uploadPhotosAction(
    * refused: what the ceiling bounds is one reading job, not one night.
    */
   const ids: string[] = [];
+  const leads: string[] = [];
   let stackId = randomUUID();
   try {
     for (const [index, file] of files.entries()) {
       if (index > 0 && index % MAX_STACK_PAGES === 0) stackId = randomUUID();
       const created = await storePhoto(session, stackId, file);
       ids.push(created.id);
+      if (index % MAX_STACK_PAGES === 0) leads.push(created.id);
+    }
+    for (const leadId of leads) {
+      await enqueueAttachmentJob(session.userId, leadId, "ocr_attachment");
     }
   } catch (error) {
     return { error: photoError(error) };
   }
 
+  kickWorker();
   refreshCapture();
   redirect("/import");
 }
@@ -135,10 +143,10 @@ export async function uploadPhotosAction(
  * next one. Keeping each page in its own request also means a long night is
  * not one body large enough to hit `serverActions.bodySizeLimit`.
  *
- * Nothing is read here. The pages of one stack are copied together, and
- * the stack is not finished until the writer says it is — which is also where
- * the destination badge is, so a page cannot leave this machine before the
- * screen has named where it is going.
+ * A normal one-page capture is queued in this same action. Multi-page mode
+ * only stores: the stack cannot be read until the writer has said the last
+ * page is present. In both cases the destination and any remote acknowledgement
+ * arrived in this form before the encrypted upload is handed to the worker.
  */
 export async function uploadPhotoAction(formData: FormData): Promise<PhotoUploadResult> {
   await assertCsrf(formData);
@@ -146,26 +154,46 @@ export async function uploadPhotoAction(formData: FormData): Promise<PhotoUpload
 
   const file = asFile(formData.get("file"));
   if (!file) return { error: "Choose a photograph first." };
+  const autoProcess = formData.get("autoProcess") === "1";
+  if (autoProcess) {
+    const gated = await gateCapturePipeline(session, formData);
+    if (gated) return gated;
+  }
 
   let created;
   try {
     created = await storePhoto(session, stackIdFrom(formData), file);
+    if (autoProcess) {
+      await enqueueAttachmentJob(session.userId, created.id, "ocr_attachment");
+    }
   } catch (error) {
     return { error: photoError(error) };
   }
 
+  if (autoProcess) kickWorker();
   refreshCapture();
-  return { id: created.id, duplicate: created.duplicate };
+  return { id: created.id, duplicate: created.duplicate, queued: autoProcess };
+}
+
+async function gateCapturePipeline(
+  session: ActiveSession,
+  formData: FormData,
+): Promise<CaptureFormState | null> {
+  const ocr = await gateDestination(session, "ocr", formData);
+  if (ocr) return ocr;
+  const config = await loadAiConfig(session.userId, session.keys);
+  if (destinationFor(config, "split").configured) {
+    return gateDestination(session, "split", formData);
+  }
+  return null;
 }
 
 /**
- * Sends a finished stack to the page-reading model.
+ * Sends a finished multi-page stack to the page-reading model.
  *
- * Split out from the upload for two reasons. Every page of the stack is
- * copied, so the job cannot start until the stack is closed. And this is the
- * screen that names the destination: uploading used to queue the reading as a
- * side effect, which sent a photographed page to whatever model Settings held
- * without ever putting the host in front of the writer.
+ * Every page of the stack is copied, so the job cannot start until the stack
+ * is closed. Single-page capture does not have that ambiguity and queues at
+ * upload time; both paths use the same destination gate.
  */
 export async function readStackAction(
   _previous: CaptureFormState,
@@ -190,7 +218,7 @@ export async function readStackAction(
   await enqueueAttachmentJob(session.userId, stack.leadId, "ocr_attachment");
   kickWorker();
   refreshCapture();
-  redirect(`/import/review/${stack.id}`);
+  redirect("/import");
 }
 
 /**
@@ -483,7 +511,7 @@ async function runSplit(session: ActiveSession, body: string): Promise<SplitPart
       leavesMachine: destination.leavesMachine,
     },
   });
-  return parseSplitParts(response.text);
+  return parseSplitParts(response.text, body);
 }
 
 /**
@@ -534,4 +562,3 @@ function partsFromForm(form: FormData): SplitPart[] {
   }
   return parts;
 }
-

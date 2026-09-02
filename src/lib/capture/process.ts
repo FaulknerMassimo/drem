@@ -11,10 +11,18 @@ import type { UserKeys } from "@/lib/crypto/envelope";
 import { completeRole, RoleNotConfiguredError } from "@/lib/ai/chat";
 import { loadAiConfig } from "@/lib/ai/config";
 import { destinationFor } from "@/lib/ai/destination";
-import { MAX_STACK_PAGES, OCR_RESPONSE_SCHEMA, ocrMessages, splitMessages } from "@/lib/ai/prompts";
+import {
+  MAX_STACK_PAGES,
+  OCR_RESPONSE_SCHEMA,
+  ocrMessages,
+  ocrVerificationMessages,
+  splitMessages,
+} from "@/lib/ai/prompts";
 import { SPLIT_TIMEOUT_MS } from "@/lib/ai/providers/http";
 import { publicModelError } from "@/lib/ai/public-error";
 import type { AiConfig } from "@/lib/ai/types";
+import { nightDateFor } from "@/lib/journal/dates";
+import { fillMissingNightTimes } from "@/lib/journal/nights";
 import {
   getAttachment,
   imageBytesForModel,
@@ -36,6 +44,7 @@ import {
   type SplitPart,
 } from "./fields";
 import { transcribeAudio } from "./whisper";
+import { confirmAsDreams, type ConfirmFields } from "./confirm";
 
 class SkipError extends Error {
   constructor(message: string) {
@@ -69,11 +78,12 @@ function splitBudget(pageCount: number): { maxTokens: number; timeoutMs: number 
  * lost lines — and changing the prompt or the model did not recover the
  * copy. One image, one transcript is the job the model can do.
  *
- * The copies are then joined in photograph order and, if a split model is
- * assigned, carved into dreams as a text-only pass. That is the original
- * pipeline, minus the tick-box join: the stack already says which pages
- * belong together, and "does this dream carry on over the page" is a
- * question about the joined log, not about any photograph in it.
+ * Each copy is proofread against that same single image, then the copies are
+ * joined in photograph order and organised as a text-only pass. A dedicated
+ * split model is used when assigned; otherwise the page reader handles the
+ * text. The stack already says which pages belong together, and "does this
+ * dream carry on over the page" is a question about the joined log, not about
+ * any photograph in it.
  */
 export async function runOcrJob(userId: string, keys: UserKeys, leadId: string): Promise<void> {
   const lead = await getAttachment(userId, keys, leadId);
@@ -90,11 +100,47 @@ export async function runOcrJob(userId: string, keys: UserKeys, leadId: string):
   const log = joinPageTranscripts(pages);
   if (!log) throw new Error("The model returned no dream text for those pages.");
 
+  // Keep the verified copy even if the organiser fails all of its retries.
+  // The exception screen can then correct or split real text instead of
+  // asking the writer to type the photographed night from scratch.
+  await saveReading(userId, keys, leadId, [mergePageTranscripts(pages)], "running");
   const parts = await splitCopiedLog(userId, config, log, pages.length);
-  const dreams = parts ? readingFromPages(pages, parts) : [mergePageTranscripts(pages)];
+  const dreams = readingFromPages(pages, parts);
 
   await saveReading(userId, keys, leadId, dreams);
   await markStackStatus(userId, lead.stackId, "succeeded");
+  const fallbackDate = nightDateFor(lead.createdAt);
+  const fields: ConfirmFields[] = dreams.map((dream) => ({
+    nightDate: dream.date.value ?? fallbackDate,
+    title: dream.title.value,
+    body: dream.body.value,
+    lucidity: dream.lucidity.value ?? 0,
+    vividness: dream.vividness.value,
+    control: dream.control.value,
+    recallClarity: dream.recallClarity.value,
+    emotionalValence: dream.emotionalValence.value,
+    isNightmare: dream.isNightmare.value ?? false,
+    isRecurring: dream.isRecurring.value ?? false,
+    tags: dream.tags.value,
+    isFragment: dream.isFragment,
+    attachmentIds: dream.pages
+      .map((page) => pageIds[page - 1])
+      .filter((id): id is string => Boolean(id)),
+  }));
+  const ids = await confirmAsDreams(userId, keys, {
+    parts: fields,
+    source: "ocr",
+    attachmentIds: pageIds,
+    isDraft: false,
+  });
+  await fillMissingNightTimes(userId, fields[0]!.nightDate, {
+    bedTime: dreams.find((dream) => dream.bedTime.value)?.bedTime.value ?? null,
+    wakeTime: dreams.find((dream) => dream.wakeTime.value)?.wakeTime.value ?? null,
+  });
+  await recordAuthEvent("ai_request", {
+    userId,
+    detail: { kind: "capture_auto_file", entries: ids.length, pages: pageIds.length },
+  });
 }
 
 async function copyPages(
@@ -130,8 +176,31 @@ async function copyPages(
         images: [{ mimeType: image.mimeType, bytes: image.bytes }],
       },
     );
+    const first = parsePageTranscript(response.text);
+    const verification = ocrVerificationMessages({
+      date: first.date.value,
+      title: first.title.value,
+      body: first.body.value,
+      tags: first.tags.value,
+      lucidity: first.lucidity.value,
+      bedTime: first.bedTime.value,
+      wakeTime: first.wakeTime.value,
+    });
+    const { response: checked } = await completeRole(
+      config,
+      "ocr",
+      [
+        { role: "system", content: verification.system },
+        { role: "user", content: verification.user },
+      ],
+      {
+        json: true,
+        jsonSchema: OCR_RESPONSE_SCHEMA,
+        images: [{ mimeType: image.mimeType, bytes: image.bytes }],
+      },
+    );
     ocrDestination = destination;
-    const transcript = parsePageTranscript(response.text);
+    const transcript = parsePageTranscript(checked.text);
     pages.push({ ...transcript, pages: [i + 1] });
   }
 
@@ -156,45 +225,49 @@ async function copyPages(
 }
 
 /**
- * Carves the joined copies into dreams, if a split model is assigned.
- *
- * A split that fails after a good copy is not a failed reading: the writer
- * still has the words, and the review screen can split them. Failing the job
- * would re-copy every page to retry a text-only pass.
+ * Organises the joined copies into finished entries. A failed or non-verbatim
+ * answer fails the job rather than silently filing the whole night as one
+ * dream; the verified joined copy was persisted immediately before this call,
+ * so the exception screen still has everything the page reader recovered.
  */
 async function splitCopiedLog(
   userId: string,
   config: AiConfig,
   log: string,
   pageCount: number,
-): Promise<SplitPart[] | null> {
-  if (!destinationFor(config, "split").configured) return null;
-  try {
-    const prompt = splitMessages(log, "pages");
-    const { response, destination } = await completeRole(
-      config,
-      "split",
-      [
-        { role: "system", content: prompt.system },
-        { role: "user", content: prompt.user },
-      ],
-      { json: true, budget: splitBudget(pageCount) },
-    );
-    await recordAuthEvent("ai_request", {
-      userId,
-      detail: {
-        kind: "split",
-        provider: destination.providerKind,
-        host: destination.host,
-        leavesMachine: destination.leavesMachine,
-      },
-    });
-    return parseSplitParts(response.text);
-  } catch {
-    // The copies are already in hand. Failing here would re-photograph every
-    // page to retry a text-only pass; the review screen can still split.
-    return null;
+): Promise<SplitPart[]> {
+  /*
+   * A separate split assignment is useful when the vision model is expensive,
+   * but it is not a prerequisite for automatic capture. A page-reading chat
+   * model can organise plain text too, and using that same already-approved
+   * destination removes a configuration trap from the one-tap path.
+   */
+  const splitConfig = destinationFor(config, "split").configured
+    ? config
+    : { ...config, roles: { ...config.roles, split: config.roles.ocr } };
+  if (!splitConfig.roles.split) {
+    throw new RoleNotConfiguredError("ocr");
   }
+  const prompt = splitMessages(log, "pages");
+  const { response, destination } = await completeRole(
+    splitConfig,
+    "split",
+    [
+      { role: "system", content: prompt.system },
+      { role: "user", content: prompt.user },
+    ],
+    { json: true, budget: splitBudget(pageCount) },
+  );
+  await recordAuthEvent("ai_request", {
+    userId,
+    detail: {
+      kind: "split",
+      provider: destination.providerKind,
+      host: destination.host,
+      leavesMachine: destination.leavesMachine,
+    },
+  });
+  return parseSplitParts(response.text, log);
 }
 
 export async function runTranscribeJob(

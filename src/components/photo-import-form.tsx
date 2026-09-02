@@ -4,15 +4,17 @@ import { useActionState, useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { FormError } from "@/components/form-error";
 import { SubmitButton } from "@/components/submit-button";
-import { uploadPhotoAction, uploadPhotosAction } from "@/lib/capture/actions";
+import { DestinationBadge } from "@/components/destination-badge";
+import { readStackAction, uploadPhotoAction, uploadPhotosAction } from "@/lib/capture/actions";
 import type { CaptureFormState, PhotoUploadResult } from "@/lib/capture/form-state";
+import type { Destination } from "@/lib/ai/types";
 import { MAX_STACK_PAGES } from "@/lib/ai/prompts";
 import { randomUuid } from "@/lib/random-id";
 import { CSRF_FIELD } from "@/lib/security/constants";
 
 const ACCEPT = "image/jpeg,image/png,image/webp,image/gif";
 
-type PageStatus = "uploading" | "stored" | "duplicate" | "failed";
+type PageStatus = "uploading" | "stored" | "duplicate" | "queued" | "failed";
 
 interface QueuedPage {
   key: number;
@@ -24,7 +26,7 @@ interface QueuedPage {
 }
 
 /**
- * Photograph the pages of one night, then have them read.
+ * One-tap photo capture, with an explicit multi-page mode for the rarer case.
  *
  * A phone camera hands the file input a single image per capture and replaces
  * whatever was there before, so `multiple` buys nothing on the surface this
@@ -32,27 +34,35 @@ interface QueuedPage {
  * is therefore uploaded the moment it is taken and the input is emptied for
  * the next one, which also keeps a ten-page night from arriving as one request.
  *
- * Uploading no longer starts a reading of its own. The pages accumulate into
- * a *stack* under one id, and the job copies them one page at a time when the
- * writer says the stack is complete — then joins the copies and splits the
- * log. Sending the stack is a step of its own, on the page above rather than
- * in here: `StackReadForm` owns it, so it is still there after a reload and
- * it is where the destination badge goes.
+ * A normal photo is queued as soon as its encrypted upload lands. Multi-page
+ * mode accumulates a *stack* under one id until the writer says it is complete,
+ * because starting after page one would make it impossible to discover that a
+ * sentence or dream continues onto page two.
  *
  * The plain form underneath is the no-JavaScript path and still posts the
  * batch action; the queue replaces its submit button once hydrated.
  */
-export function PhotoImportForm({ csrfToken }: { csrfToken: string }) {
+export function PhotoImportForm({
+  csrfToken,
+  destination,
+  splitDestination,
+}: {
+  csrfToken: string;
+  destination: Destination;
+  splitDestination: Destination;
+}) {
   const [state, action] = useActionState<CaptureFormState, FormData>(uploadPhotosAction, {});
+  const [readState, readAction] = useActionState<CaptureFormState, FormData>(readStackAction, {});
   const [pages, setPages] = useState<QueuedPage[]>([]);
   /*
-   * One id for every page photographed on this visit. Sending the stack
-   * redirects to its review screen, so this component unmounts and the next
-   * visit mints a fresh one — a stack already at the model can never be added
-   * to behind its back.
+   * One id for every page photographed in multi-page mode. Single photos mint
+   * their own id inside `upload`, so another tap can never append a page behind
+   * a job that is already reading.
    */
   const [stackId] = useState<string>(randomUuid);
   const [hydrated, setHydrated] = useState(false);
+  const [multiplePages, setMultiplePages] = useState(false);
+  const [acknowledged, setAcknowledged] = useState(false);
   const router = useRouter();
   const chain = useRef<Promise<void>>(Promise.resolve());
   const previews = useRef<string[]>([]);
@@ -64,8 +74,14 @@ export function PhotoImportForm({ csrfToken }: { csrfToken: string }) {
   useEffect(() => () => previews.current.forEach((url) => URL.revokeObjectURL(url)), []);
 
   const stored = pages.filter((page) => page.status === "stored" || page.status === "duplicate");
+  const queued = pages.filter((page) => page.status === "queued");
   const uploading = pages.some((page) => page.status === "uploading");
-  const full = stored.length >= MAX_STACK_PAGES;
+  const full = multiplePages && stored.length >= MAX_STACK_PAGES;
+  const remote = [destination, splitDestination].filter(
+    (item) => item.configured && item.leavesMachine,
+  );
+  const remoteHosts = [...new Set(remote.map((item) => item.host))];
+  const canChoose = destination.configured && (remote.length === 0 || acknowledged);
 
   function onChoose(event: React.ChangeEvent<HTMLInputElement>): void {
     const input = event.currentTarget;
@@ -77,7 +93,7 @@ export function PhotoImportForm({ csrfToken }: { csrfToken: string }) {
 
     // Never more pages than one reading can carry. The rest is not refused —
     // it goes to the next stack, once this one has been sent.
-    const room = Math.max(0, MAX_STACK_PAGES - stored.length);
+    const room = multiplePages ? Math.max(0, MAX_STACK_PAGES - stored.length) : chosen.length;
     const queued = chosen.slice(0, room).map((file) => {
       const preview = URL.createObjectURL(file);
       previews.current.push(preview);
@@ -104,8 +120,10 @@ export function PhotoImportForm({ csrfToken }: { csrfToken: string }) {
   async function upload(key: number, file: File): Promise<void> {
     const body = new FormData();
     body.set(CSRF_FIELD, csrfToken);
-    body.set("stackId", stackId);
+    body.set("stackId", multiplePages ? stackId : randomUuid());
     body.set("file", file);
+    if (!multiplePages) body.set("autoProcess", "1");
+    if (acknowledged) body.set("acknowledge", "1");
 
     let result: PhotoUploadResult;
     try {
@@ -119,7 +137,13 @@ export function PhotoImportForm({ csrfToken }: { csrfToken: string }) {
         page.key === key
           ? {
               ...page,
-              status: result.error ? "failed" : result.duplicate ? "duplicate" : "stored",
+              status: result.error
+                ? "failed"
+                : result.queued
+                  ? "queued"
+                  : result.duplicate
+                    ? "duplicate"
+                    : "stored",
               id: result.id,
               error: result.error,
             }
@@ -133,14 +157,30 @@ export function PhotoImportForm({ csrfToken }: { csrfToken: string }) {
       <div>
         <h2 className="font-medium">Photograph a page</h2>
         <p className="mt-1 text-sm text-ink-400">
-          Take every page of the night, then have them read together — one pass
-          finds where each dream starts and ends, across the page breaks.
-          Nothing is saved as a dream until you confirm the reading.
+          Take a photo and leave. It is transcribed, divided into dreams and
+          filed with its ratings and tags in the background.
         </p>
       </div>
 
       <form action={action} className="space-y-4">
         <input type="hidden" name={CSRF_FIELD} value={csrfToken} />
+        <DestinationBadge destination={destination} what="the photograph" />
+        {splitDestination.configured && (
+          <DestinationBadge destination={splitDestination} what="the transcript" />
+        )}
+        {remote.length > 0 && (
+          <label className="flex items-start gap-3 text-sm text-ink-200">
+            <input
+              type="checkbox"
+              name="acknowledge"
+              value="1"
+              checked={acknowledged}
+              onChange={(event) => setAcknowledged(event.currentTarget.checked)}
+              className="mt-0.5 size-4 accent-warn-500"
+            />
+            <span>I understand this will be sent to {remoteHosts.join(" and ")}.</span>
+          </label>
+        )}
         {/*
           Hidden rather than disabled once the stack is full: a picker that
           opens the camera and then silently drops the photograph is worse than
@@ -155,6 +195,7 @@ export function PhotoImportForm({ csrfToken }: { csrfToken: string }) {
                 accept={ACCEPT}
                 capture="environment"
                 className="sr-only"
+                disabled={!canChoose}
                 onChange={onChoose}
               />
               Take a photo
@@ -166,6 +207,7 @@ export function PhotoImportForm({ csrfToken }: { csrfToken: string }) {
                 accept={ACCEPT}
                 multiple
                 className="sr-only"
+                disabled={!canChoose}
                 onChange={onChoose}
               />
               Choose from library
@@ -174,8 +216,22 @@ export function PhotoImportForm({ csrfToken }: { csrfToken: string }) {
         )}
 
         <FormError message={state.error} />
+        <FormError message={readState.error} />
         {!hydrated && <SubmitButton pendingLabel="Uploading…">Upload pages</SubmitButton>}
       </form>
+
+      {hydrated && (
+        <label className="flex items-center gap-2 text-sm text-ink-300">
+          <input
+            type="checkbox"
+            checked={multiplePages}
+            disabled={stored.length > 0 || uploading}
+            onChange={(event) => setMultiplePages(event.currentTarget.checked)}
+            className="size-4 accent-lucid-500"
+          />
+          These are several pages of the same night
+        </label>
+      )}
 
       {pages.length > 0 && (
         <ul className="space-y-2">
@@ -202,10 +258,23 @@ export function PhotoImportForm({ csrfToken }: { csrfToken: string }) {
       <p className="text-sm text-ink-400" aria-live="polite">
         {uploading
           ? "Uploading…"
-          : stored.length === 0
-            ? "Photos appear here as you add them."
-            : `${stored.length === 1 ? "1 page is" : `${stored.length} pages are`} ready to be read, at the top of this screen.`}
+          : queued.length > 0 && !multiplePages
+            ? "Queued. You can leave this page; the finished entries will appear in your journal."
+            : stored.length === 0
+              ? "Photos appear here as you add them."
+              : `${stored.length === 1 ? "1 page is" : `${stored.length} pages are`} ready.`}
       </p>
+
+      {multiplePages && stored.length > 0 && !uploading && (
+        <form action={readAction} className="space-y-2">
+          <input type="hidden" name={CSRF_FIELD} value={csrfToken} />
+          <input type="hidden" name="stackId" value={stackId} />
+          {acknowledged && <input type="hidden" name="acknowledge" value="1" />}
+          <SubmitButton pendingLabel="Queuing…">
+            Finish and process {stored.length === 1 ? "this page" : `these ${stored.length} pages`}
+          </SubmitButton>
+        </form>
+      )}
     </div>
   );
 }
@@ -219,6 +288,9 @@ function PageStatusLabel({ page }: { page: QueuedPage }) {
   }
   if (page.status === "duplicate") {
     return <span className="text-xs text-ink-400">already added</span>;
+  }
+  if (page.status === "queued") {
+    return <span className="text-xs text-ok-500">queued</span>;
   }
   return <span className="text-xs text-ok-500">ready</span>;
 }
